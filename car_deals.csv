@@ -1,0 +1,2 @@
+model,buy_date,buy_price,buy_type,sell_date,sell_price,sell_type,expenses,expenses_type,profit,expenses_desc
+BMW E35,30.06.2025,10000000.0,Безнал,30.06.2025,12000000.0,Наличные,250000.0,Безнал,1750000.0,Бронепленка в круг
