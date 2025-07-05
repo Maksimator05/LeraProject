@@ -131,9 +131,12 @@ class MoneyTrackerApp:
             ("Дата покупки:", "entry", None, datetime.now().strftime("%d.%m.%Y")),
             ("Цена покупки:", "entry", None, "0.00"),
             ("Тип оплаты покупки:", "combobox", ["Наличные", "Безнал", "Другое"], "Наличные"),
+            ("ФИО продавца:", "entry", None, ""),  # Новое необязательное поле
             ("Дата продажи:", "entry", None, datetime.now().strftime("%d.%m.%Y")),
             ("Цена продажи:", "entry", None, "0.00"),
             ("Тип оплаты продажи:", "combobox", ["Наличные", "Безнал", "Другое"], "Наличные"),
+            ("ФИО покупателя:", "entry", None, ""),  # Новое необязательное поле
+            ("На комиссии:", "combobox", ["Да", "Нет"], "Нет"),  # Новое поле
             ("Доп. расходы:", "entry", None, "0.00"),
             ("Тип оплаты расходов:", "combobox", ["Наличные", "Безнал", "Другое"], "Наличные"),
             ("Описание расходов:", "entry", None, "")
@@ -216,13 +219,16 @@ class MoneyTrackerApp:
             "#2": {"name": "buy_date", "text": "Дата покупки", "width": 120, "anchor": "center"},
             "#3": {"name": "buy_price", "text": "Цена покупки", "width": 120, "anchor": "e"},
             "#4": {"name": "buy_type", "text": "Оплата покупки", "width": 120, "anchor": "center"},
-            "#5": {"name": "sell_date", "text": "Дата продажи", "width": 120, "anchor": "center"},
-            "#6": {"name": "sell_price", "text": "Цена продажи", "width": 120, "anchor": "e"},
-            "#7": {"name": "sell_type", "text": "Оплата продажи", "width": 120, "anchor": "center"},
-            "#8": {"name": "expenses", "text": "Доп. расходы", "width": 120, "anchor": "e"},
-            "#9": {"name": "expenses_type", "text": "Оплата расходов", "width": 120, "anchor": "center"},
-            "#10": {"name": "profit", "text": "Прибыль", "width": 120, "anchor": "e"},
-            "#11": {"name": "expenses_desc", "text": "Описание расходов", "width": 200}
+            "#5": {"name": "seller_name", "text": "Продавец", "width": 150, "anchor": "center"},  # Новый столбец
+            "#6": {"name": "sell_date", "text": "Дата продажи", "width": 120, "anchor": "center"},
+            "#7": {"name": "sell_price", "text": "Цена продажи", "width": 120, "anchor": "e"},
+            "#8": {"name": "sell_type", "text": "Оплата продажи", "width": 120, "anchor": "center"},
+            "#9": {"name": "buyer_name", "text": "Покупатель", "width": 150, "anchor": "center"},  # Новый столбец
+            "#10": {"name": "on_commission", "text": "Комиссия", "width": 100, "anchor": "center"},  # Новый столбец
+            "#11": {"name": "expenses", "text": "Доп. расходы", "width": 120, "anchor": "e"},
+            "#12": {"name": "expenses_type", "text": "Оплата расходов", "width": 120, "anchor": "center"},
+            "#13": {"name": "profit", "text": "Прибыль", "width": 120, "anchor": "e"},
+            "#14": {"name": "expenses_desc", "text": "Описание расходов", "width": 200}
         }
 
         self.car_tree = ttk.Treeview(self.report_frame, columns=list(car_columns.keys()), show="headings")
@@ -311,9 +317,12 @@ class MoneyTrackerApp:
             buy_date = self.car_entries["Дата покупки"].get().strip()
             buy_price = float(self.car_entries["Цена покупки"].get())
             buy_type = self.car_entries["Тип оплаты покупки"].get()
+            seller_name = self.car_entries["ФИО продавца"].get().strip()  # Новое поле
             sell_date = self.car_entries["Дата продажи"].get().strip()
             sell_price = float(self.car_entries["Цена продажи"].get())
             sell_type = self.car_entries["Тип оплаты продажи"].get()
+            buyer_name = self.car_entries["ФИО покупателя"].get().strip()  # Новое поле
+            on_commission = self.car_entries["На комиссии"].get()  # Новое поле
             expenses = float(self.car_entries["Доп. расходы"].get())
             expenses_type = self.car_entries["Тип оплаты расходов"].get()
             expenses_desc = self.car_entries["Описание расходов"].get().strip()
@@ -329,9 +338,12 @@ class MoneyTrackerApp:
                 "buy_date": buy_date,
                 "buy_price": buy_price,
                 "buy_type": buy_type,
+                "seller_name": seller_name,  # Новое поле
                 "sell_date": sell_date,
                 "sell_price": sell_price,
                 "sell_type": sell_type,
+                "buyer_name": buyer_name,  # Новое поле
+                "on_commission": on_commission,  # Новое поле
                 "expenses": expenses,
                 "expenses_type": expenses_type,
                 "profit": profit,
@@ -386,9 +398,12 @@ class MoneyTrackerApp:
                 deal["buy_date"],
                 f"{deal['buy_price']:,.2f}",
                 deal["buy_type"],
+                deal.get("seller_name", ""),  # Новое поле
                 deal["sell_date"],
                 f"{deal['sell_price']:,.2f}",
                 deal["sell_type"],
+                deal.get("buyer_name", ""),  # Новое поле
+                deal.get("on_commission", "Нет"),  # Новое поле
                 f"{deal['expenses']:,.2f}",
                 deal["expenses_type"],
                 f"{deal['profit']:,.2f}",
@@ -440,9 +455,12 @@ class MoneyTrackerApp:
                     "buy_date": row["buy_date"],
                     "buy_price": float(row["buy_price"]),
                     "buy_type": row.get("buy_type", "Наличные"),
+                    "seller_name": row.get("seller_name", ""),  # Новое поле
                     "sell_date": row["sell_date"],
                     "sell_price": float(row["sell_price"]),
                     "sell_type": row.get("sell_type", "Наличные"),
+                    "buyer_name": row.get("buyer_name", ""),  # Новое поле
+                    "on_commission": row.get("on_commission", "Нет"),  # Новое поле
                     "expenses": float(row["expenses"]),
                     "expenses_type": row.get("expenses_type", "Наличные"),
                     "profit": float(row["profit"]),
@@ -474,8 +492,8 @@ class MoneyTrackerApp:
             # Сохранение авто-сделок
             with open("car_deals.csv", "w", newline="", encoding="utf-8") as f:
                 writer = csv.DictWriter(f, fieldnames=[
-                    "model", "buy_date", "buy_price", "buy_type",
-                    "sell_date", "sell_price", "sell_type",
+                    "model", "buy_date", "buy_price", "buy_type", "seller_name",
+                    "sell_date", "sell_price", "sell_type", "buyer_name", "on_commission",
                     "expenses", "expenses_type", "profit", "expenses_desc"
                 ])
                 writer.writeheader()
