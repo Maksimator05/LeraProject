@@ -1,1 +1,1 @@
-model,buy_date,buy_price,buy_type,sell_date,sell_price,sell_type,expenses,expenses_type,profit,expenses_desc
+model,buy_date,buy_price,buy_type,seller_name,sell_date,sell_price,sell_type,buyer_name,on_commission,expenses,expenses_type,profit,expenses_desc

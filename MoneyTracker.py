@@ -3,6 +3,7 @@ import customtkinter as ctk
 from tkinter import ttk, messagebox
 import csv
 from datetime import datetime
+import pandas as pd
 
 # Настройка тем - принудительно темная
 ctk.set_appearance_mode("Dark")
@@ -13,36 +14,26 @@ class MoneyTrackerApp:
     def __init__(self, root):
         self.root = root
         self.root.title("💰 Авто-Трекер Финансов v2.1")
-        self.root.geometry("1300x900")  # Увеличенный размер окна
+        self.root.geometry("1300x900")
 
-        # Увеличенные шрифты
         self.large_font = ("Arial", 14)
         self.xlarge_font = ("Arial", 16, "bold")
         self.xxlarge_font = ("Arial", 18, "bold")
 
-        # Данные
         self.transactions = []
         self.car_deals = []
-        self.initial_capital = 0  # Теперь будет вводиться вручную
+        self.initial_capital = 0
         self.load_data()
 
-        # Интерфейс
         self.setup_ui()
 
     def setup_ui(self):
-        # Главный контейнер
         self.main_frame = ctk.CTkFrame(self.root)
         self.main_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Стиль для вкладок
         style = ttk.Style()
         style.theme_create("custom_style", parent="alt", settings={
-            "TNotebook": {
-                "configure": {
-                    "background": "#f0f0f0",
-                    "tabmargins": [10, 5, 0, 0],
-                }
-            },
+            "TNotebook": {"configure": {"background": "#f0f0f0", "tabmargins": [10, 5, 0, 0]}},
             "TNotebook.Tab": {
                 "configure": {
                     "font": self.xlarge_font,
@@ -59,35 +50,28 @@ class MoneyTrackerApp:
         })
         style.theme_use("custom_style")
 
-        # Вкладки
         self.notebook = ttk.Notebook(self.main_frame)
         self.notebook.pack(fill="both", expand=True)
 
-        # Вкладка добавления операций
         self.add_frame = ctk.CTkFrame(self.notebook)
         self.notebook.add(self.add_frame, text="➕ Добавить операцию")
         self.setup_add_frame()
 
-        # Вкладка добавления автосделок
         self.car_frame = ctk.CTkFrame(self.notebook)
         self.notebook.add(self.car_frame, text="🚗 Авто-сделки")
         self.setup_car_frame()
 
-        # Вкладка отчета
         self.report_frame = ctk.CTkFrame(self.notebook)
         self.notebook.add(self.report_frame, text="📊 Финансовый отчет")
         self.setup_report_frame()
 
-        # Вкладка настроек
         self.settings_frame = ctk.CTkFrame(self.notebook)
         self.notebook.add(self.settings_frame, text="⚙️ Настройки")
         self.setup_settings_frame()
 
     def setup_add_frame(self):
         self.add_frame.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(self.add_frame, text="Новая операция", font=self.large_font).grid(
-            row=0, column=0, columnspan=2, pady=(0, 20))
+        ctk.CTkLabel(self.add_frame, text="Новая операция", font=self.large_font).grid(row=0, column=0, columnspan=2, pady=(0, 20))
 
         fields = [
             ("Тип операции:", "combobox", ["Приход", "Расход"], "Приход"),
@@ -98,27 +82,19 @@ class MoneyTrackerApp:
 
         self.entries = {}
         for row, (label, field_type, options, default) in enumerate(fields, start=1):
-            ctk.CTkLabel(self.add_frame, text=label).grid(
-                row=row, column=0, padx=10, pady=5, sticky="e")
+            lbl = ctk.CTkLabel(self.add_frame, text=label, font=self.large_font)
+            lbl.grid(row=row, column=0, sticky="e", pady=5, padx=10)
 
-            if field_type == "combobox":
-                entry = ctk.CTkComboBox(self.add_frame, values=options)
-                entry.set(default)
-            else:
+            if field_type == "entry":
                 entry = ctk.CTkEntry(self.add_frame)
                 entry.insert(0, default)
+            elif field_type == "combobox":
+                entry = ctk.CTkComboBox(self.add_frame, values=options)
+                entry.set(default)
 
-            entry.grid(row=row, column=1, padx=10, pady=5, sticky="we")
-            self.entries[label.replace(":", "")] = entry
+            entry.grid(row=row, column=1, sticky="ew", pady=5, padx=10)
+            self.entries[label] = entry
 
-        ctk.CTkButton(
-            self.add_frame,
-            text="Добавить операцию",
-            command=self.add_transaction,
-            fg_color="#4CAF50",
-            hover_color="#2E7D32",
-            height=40
-        ).grid(row=len(fields) + 1, column=0, columnspan=2, pady=20, sticky="we")
 
     def setup_car_frame(self):
         self.car_frame.grid_columnconfigure(1, weight=1)
@@ -167,27 +143,96 @@ class MoneyTrackerApp:
         ).grid(row=len(car_fields) + 1, column=0, columnspan=2, pady=20, sticky="we")
 
     def setup_settings_frame(self):
-        self.settings_frame.grid_columnconfigure(1, weight=1)
+        ctk.CTkLabel(self.settings_frame, text="Стартовый капитал:", font=self.large_font).pack(pady=(20, 5))
+        self.capital_entry = ctk.CTkEntry(self.settings_frame)
+        self.capital_entry.insert(0, str(self.initial_capital))
+        self.capital_entry.pack()
 
-        ctk.CTkLabel(self.settings_frame, text="Настройки программы", font=self.large_font).grid(
-            row=0, column=0, columnspan=2, pady=(0, 20))
+        def save_capital():
+            try:
+                self.initial_capital = float(self.capital_entry.get())
+                self.save_data()
+                messagebox.showinfo("Сохранено", "Стартовый капитал обновлён.")
+            except ValueError:
+                messagebox.showerror("Ошибка", "Введите число.")
 
-        # Поле для ввода начального капитала
-        ctk.CTkLabel(self.settings_frame, text="Начальный капитал:").grid(
-            row=1, column=0, padx=10, pady=5, sticky="e")
+        ctk.CTkButton(self.settings_frame, text="💾 Сохранить капитал", command=save_capital).pack(pady=10)
+        ctk.CTkButton(self.settings_frame, text="📥 Импорт из Excel", command=self.import_from_excel).pack(pady=10)
+        ctk.CTkButton(self.settings_frame, text="📤 Экспорт в Excel", command=self.export_to_excel).pack(pady=10)
 
-        self.initial_capital_entry = ctk.CTkEntry(self.settings_frame)
-        self.initial_capital_entry.insert(0, f"{self.initial_capital:,.2f}")
-        self.initial_capital_entry.grid(row=1, column=1, padx=10, pady=5, sticky="we")
+    def setup_report_frame(self):
+        self.report_frame.grid_columnconfigure(0, weight=1)
+        self.report_frame.grid_rowconfigure(1, weight=1)
 
-        ctk.CTkButton(
-            self.settings_frame,
-            text="Сохранить настройки",
-            command=self.save_settings,
-            fg_color="#FF9800",
-            hover_color="#F57C00",
-            height=40
-        ).grid(row=2, column=0, columnspan=2, pady=20, sticky="we")
+        columns = ["Тип", "Сумма", "Описание", "Категория", "", "шапка"]
+        self.report_tree = ttk.Treeview(self.report_frame, columns=columns, show="headings")
+
+        for col in columns:
+            self.report_tree.heading(col, text=col)
+            self.report_tree.column(col, width=150)
+
+        self.report_tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+        def on_double_click(event):
+            item = self.report_tree.identify_row(event.y)
+            column = self.report_tree.identify_column(event.x)
+            if not item or not column:
+                return
+
+            col_index = int(column[1:]) - 1
+            x, y, width, height = self.report_tree.bbox(item, column)
+            value = self.report_tree.item(item, "values")[col_index]
+
+            entry = ctk.CTkEntry(self.report_frame)
+            entry.insert(0, value)
+            entry.place(x=x, y=y, width=width, height=height)
+
+            def save_edit(event=None):
+                new_val = entry.get()
+                current = list(self.report_tree.item(item, "values"))
+                current[col_index] = new_val
+                self.report_tree.item(item, values=current)
+                entry.destroy()
+
+            entry.bind("<Return>", save_edit)
+            entry.bind("<FocusOut>", lambda e: entry.destroy())
+
+        self.report_tree.bind("<Double-1>", on_double_click)
+
+    def import_from_excel(self):
+        path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
+        if not path:
+            return
+        try:
+            df = pd.read_excel(path, sheet_name=None)
+            if "Transactions" in df:
+                self.transactions = df["Transactions"].to_dict("records")
+            if "CarDeals" in df:
+                self.car_deals = df["CarDeals"].to_dict("records")
+            if "Config" in df and "initial_capital" in df["Config"].columns:
+                self.initial_capital = df["Config"].iloc[0]["initial_capital"]
+                self.capital_entry.delete(0, tk.END)
+                self.capital_entry.insert(0, str(self.initial_capital))
+            self.save_data()
+            self.update_report()
+            messagebox.showinfo("Успех", "Данные успешно импортированы из Excel.")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка при импорте: {e}")
+
+    def export_to_excel(self):
+        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")])
+        if not path:
+            return
+        try:
+            with pd.ExcelWriter(path, engine="openpyxl") as writer:
+                pd.DataFrame(self.transactions).to_excel(writer, sheet_name="Transactions", index=False)
+                pd.DataFrame(self.car_deals).to_excel(writer, sheet_name="CarDeals", index=False)
+                pd.DataFrame([{"initial_capital": self.initial_capital}]).to_excel(writer, sheet_name="Config", index=False)
+            messagebox.showinfo("Успех", "Данные успешно экспортированы в Excel.")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка при экспорте: {e}")
+
+
 
     def setup_report_frame(self):
         self.report_frame.grid_columnconfigure(0, weight=1)
