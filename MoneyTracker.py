@@ -170,45 +170,6 @@ class MoneyTrackerApp:
         ctk.CTkButton(self.settings_frame, text="📥 Импорт из Excel", command=self.import_from_excel).pack(pady=10)
         ctk.CTkButton(self.settings_frame, text="📤 Экспорт в Excel", command=self.export_to_excel).pack(pady=10)
 
-    def setup_report_frame(self):
-        self.report_frame.grid_columnconfigure(0, weight=1)
-        self.report_frame.grid_rowconfigure(1, weight=1)
-
-        columns = ["Тип", "Сумма", "Описание", "Категория", "", "шапка"]
-        self.report_tree = ttk.Treeview(self.report_frame, columns=columns, show="headings")
-
-        for col in columns:
-            self.report_tree.heading(col, text=col)
-            self.report_tree.column(col, width=150)
-
-        self.report_tree.pack(fill="both", expand=True, padx=10, pady=10)
-
-        def on_double_click(event):
-            item = self.report_tree.identify_row(event.y)
-            column = self.report_tree.identify_column(event.x)
-            if not item or not column:
-                return
-
-            col_index = int(column[1:]) - 1
-            x, y, width, height = self.report_tree.bbox(item, column)
-            value = self.report_tree.item(item, "values")[col_index]
-
-            entry = ctk.CTkEntry(self.report_frame)
-            entry.insert(0, value)
-            entry.place(x=x, y=y, width=width, height=height)
-
-            def save_edit(event=None):
-                new_val = entry.get()
-                current = list(self.report_tree.item(item, "values"))
-                current[col_index] = new_val
-                self.report_tree.item(item, values=current)
-                entry.destroy()
-
-            entry.bind("<Return>", save_edit)
-            entry.bind("<FocusOut>", lambda e: entry.destroy())
-
-        self.report_tree.bind("<Double-1>", on_double_click)
-
     def import_from_excel(self):
         path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
         if not path:
@@ -311,28 +272,6 @@ class MoneyTrackerApp:
             self.car_tree.heading(col, text=params["text"])
             self.car_tree.column(col, width=params["width"], anchor=params.get("anchor", "w"))
 
-        def edit_car_cell(tree, item, col_index):
-            column_id = f"#{col_index + 1}"
-            x, y, width, height = tree.bbox(item, column_id)
-            value = tree.item(item, "values")[col_index]
-
-            entry = ctk.CTkEntry(self.report_frame)
-            entry.insert(0, value)
-            entry.place(x=x, y=y, width=width, height=height)
-
-            def save_edit(event=None):
-                new_val = entry.get()
-                values = list(tree.item(item, "values"))
-                values[col_index] = new_val
-                tree.item(item, values=values)
-                entry.destroy()
-
-            entry.bind("<Return>", save_edit)
-            entry.bind("<FocusOut>", lambda e: entry.destroy())
-
-        self.car_tree.bind("<Double-1>",
-                           lambda event: self._handle_treeview_double_click(event, self.car_tree, edit_car_cell))
-
         # Скроллбары
         scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
         car_scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
@@ -370,6 +309,93 @@ class MoneyTrackerApp:
             self.summary_labels[name].pack()
 
         self.update_report()
+
+        def save_transaction_edit(item_id, col_index, new_value):
+            """Сохранение изменений в транзакциях и пересчет итогов"""
+            values = list(self.tree.item(item_id, "values"))
+            values[col_index] = new_value
+
+            # Обновляем данные в self.transactions
+            transaction = self.transactions[-int(item_id) - 1]  # Получаем соответствующую транзакцию
+            if col_index == 1:  # Тип операции
+                transaction["type"] = new_value
+                # Меняем знак суммы при изменении типа
+                amount = float(values[2].replace(" ₽", "").replace(",", ""))
+                transaction["amount"] = amount if new_value == "Приход" else -amount
+            elif col_index == 2:  # Сумма
+                amount = float(new_value.replace(" ₽", "").replace(",", ""))
+                transaction["amount"] = amount if values[1] == "Приход" else -amount
+            elif col_index == 3:  # Описание
+                transaction["description"] = new_value
+            elif col_index == 4:  # Категория
+                transaction["category"] = new_value
+
+            self.save_data()
+            self.update_summary()
+
+    def save_car_deal_edit(item_id, col_index, new_value):
+        """Сохранение изменений в авто-сделках и пересчет итогов"""
+        values = list(self.car_tree.item(item_id, "values"))
+        values[col_index] = new_value
+
+        # Обновляем данные в self.car_deals
+        deal = self.car_deals[-int(item_id) - 1]
+
+        # Обрабатываем все возможные поля
+        field_map = {
+            0: "model", 1: "buy_date", 2: "buy_price", 3: "buy_type",
+            4: "seller_name", 5: "sell_date", 6: "sell_price", 7: "sell_type",
+            8: "buyer_name", 9: "on_commission", 10: "expenses",
+            11: "expenses_type", 13: "expenses_desc"
+        }
+
+        if col_index in field_map:
+            field = field_map[col_index]
+            if field in ["buy_price", "sell_price", "expenses"]:
+                # Для числовых полей
+                new_value_clean = float(new_value.replace(" ₽", "").replace(",", ""))
+                deal[field] = new_value_clean
+                # Пересчитываем прибыль
+                deal["profit"] = deal.get("sell_price", 0) - deal.get("buy_price", 0) - deal.get("expenses", 0)
+                values[12] = f"{deal['profit']:,.2f} ₽"  # Обновляем отображение прибыли
+            else:
+                deal[field] = new_value
+
+        self.car_tree.item(item_id, values=values)
+        self.save_data()
+        self.update_summary()
+
+        def save_car_deal_edit(item_id, col_index, new_value):
+            """Сохранение изменений в авто-сделках и пересчет итогов"""
+            values = list(self.car_tree.item(item_id, "values"))
+            values[col_index] = new_value
+
+            # Обновляем данные в self.car_deals
+            deal = self.car_deals[-int(item_id) - 1]
+
+            # Обрабатываем все возможные поля
+            field_map = {
+                0: "model", 1: "buy_date", 2: "buy_price", 3: "buy_type",
+                4: "seller_name", 5: "sell_date", 6: "sell_price", 7: "sell_type",
+                8: "buyer_name", 9: "on_commission", 10: "expenses",
+                11: "expenses_type", 13: "expenses_desc"
+            }
+
+            if col_index in field_map:
+                field = field_map[col_index]
+                if field in ["buy_price", "sell_price", "expenses"]:
+                    # Для числовых полей
+                    new_value_clean = float(new_value.replace(" ₽", "").replace(",", ""))
+                    deal[field] = new_value_clean
+                    # Пересчитываем прибыль
+                    deal["profit"] = deal.get("sell_price", 0) - deal.get("buy_price", 0) - deal.get("expenses", 0)
+                    values[12] = f"{deal['profit']:,.2f} ₽"  # Обновляем отображение прибыли
+                else:
+                    deal[field] = new_value
+
+            self.car_tree.item(item_id, values=values)
+            self.save_data()
+            self.update_summary()
 
     def _handle_treeview_double_click(self, event, tree, edit_callback):
         item = tree.identify_row(event.y)
