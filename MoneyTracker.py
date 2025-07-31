@@ -1,6 +1,6 @@
 import tkinter as tk
 import customtkinter as ctk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 import csv
 from datetime import datetime
 import pandas as pd
@@ -13,7 +13,7 @@ ctk.set_default_color_theme("dark-blue")
 class MoneyTrackerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("💰 Авто-Трекер Финансов v2.1")
+        self.root.title("💰 Авто-Трекер Финансов v2.2")
         self.root.geometry("1300x900")
 
         self.large_font = ("Arial", 14)
@@ -71,7 +71,8 @@ class MoneyTrackerApp:
 
     def setup_add_frame(self):
         self.add_frame.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(self.add_frame, text="Новая операция", font=self.large_font).grid(row=0, column=0, columnspan=2, pady=(0, 20))
+        ctk.CTkLabel(self.add_frame, text="Новая операция", font=self.large_font).grid(row=0, column=0, columnspan=2,
+                                                                                       pady=(0, 20))
 
         fields = [
             ("Тип операции:", "combobox", ["Приход", "Расход"], "Приход"),
@@ -95,6 +96,15 @@ class MoneyTrackerApp:
             entry.grid(row=row, column=1, sticky="ew", pady=5, padx=10)
             self.entries[label] = entry
 
+        # 👇 Добавляем кнопку после всех полей
+        ctk.CTkButton(
+            self.add_frame,
+            text="Добавить операцию",
+            command=self.add_transaction,
+            fg_color="#4CAF50",
+            hover_color="#45a049",
+            height=40
+        ).grid(row=len(fields) + 1, column=0, columnspan=2, pady=20, sticky="we")
 
     def setup_car_frame(self):
         self.car_frame.grid_columnconfigure(1, weight=1)
@@ -232,8 +242,6 @@ class MoneyTrackerApp:
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка при экспорте: {e}")
 
-
-
     def setup_report_frame(self):
         self.report_frame.grid_columnconfigure(0, weight=1)
         self.report_frame.grid_rowconfigure(1, weight=1)
@@ -258,18 +266,39 @@ class MoneyTrackerApp:
             self.tree.heading(col, text=params["text"])
             self.tree.column(col, width=params["width"], anchor=params.get("anchor", "w"))
 
+        def edit_cell(tree, item, col_index):
+            x, y, width, height = tree.bbox(item, f"#{col_index + 1}")
+            value = tree.item(item, "values")[col_index]
+
+            entry = ctk.CTkEntry(tree, width=width, height=height)
+            entry.insert(0, value)
+            entry.place(x=x, y=y)
+
+            def save_edit(event=None):
+                new_val = entry.get()
+                values = list(tree.item(item, "values"))
+                values[col_index] = new_val
+                tree.item(item, values=values)
+                entry.destroy()
+
+            entry.bind("<Return>", save_edit)
+            entry.bind("<FocusOut>", lambda e: entry.destroy())
+            entry.focus_set()
+
+        self.tree.bind("<Double-1>", lambda event: self._handle_treeview_double_click(event, self.tree, edit_cell))
+
         # Таблица авто-сделок
         car_columns = {
             "#1": {"name": "model", "text": "Модель", "width": 150, "anchor": "center"},
             "#2": {"name": "buy_date", "text": "Дата покупки", "width": 120, "anchor": "center"},
             "#3": {"name": "buy_price", "text": "Цена покупки", "width": 120, "anchor": "e"},
             "#4": {"name": "buy_type", "text": "Оплата покупки", "width": 120, "anchor": "center"},
-            "#5": {"name": "seller_name", "text": "Продавец", "width": 150, "anchor": "center"},  # Новый столбец
+            "#5": {"name": "seller_name", "text": "Продавец", "width": 150, "anchor": "center"},
             "#6": {"name": "sell_date", "text": "Дата продажи", "width": 120, "anchor": "center"},
             "#7": {"name": "sell_price", "text": "Цена продажи", "width": 120, "anchor": "e"},
             "#8": {"name": "sell_type", "text": "Оплата продажи", "width": 120, "anchor": "center"},
-            "#9": {"name": "buyer_name", "text": "Покупатель", "width": 150, "anchor": "center"},  # Новый столбец
-            "#10": {"name": "on_commission", "text": "Комиссия", "width": 100, "anchor": "center"},  # Новый столбец
+            "#9": {"name": "buyer_name", "text": "Покупатель", "width": 150, "anchor": "center"},
+            "#10": {"name": "on_commission", "text": "Комиссия", "width": 100, "anchor": "center"},
             "#11": {"name": "expenses", "text": "Доп. расходы", "width": 120, "anchor": "e"},
             "#12": {"name": "expenses_type", "text": "Оплата расходов", "width": 120, "anchor": "center"},
             "#13": {"name": "profit", "text": "Прибыль", "width": 120, "anchor": "e"},
@@ -282,11 +311,32 @@ class MoneyTrackerApp:
             self.car_tree.heading(col, text=params["text"])
             self.car_tree.column(col, width=params["width"], anchor=params.get("anchor", "w"))
 
+        def edit_car_cell(tree, item, col_index):
+            column_id = f"#{col_index + 1}"
+            x, y, width, height = tree.bbox(item, column_id)
+            value = tree.item(item, "values")[col_index]
+
+            entry = ctk.CTkEntry(self.report_frame)
+            entry.insert(0, value)
+            entry.place(x=x, y=y, width=width, height=height)
+
+            def save_edit(event=None):
+                new_val = entry.get()
+                values = list(tree.item(item, "values"))
+                values[col_index] = new_val
+                tree.item(item, values=values)
+                entry.destroy()
+
+            entry.bind("<Return>", save_edit)
+            entry.bind("<FocusOut>", lambda e: entry.destroy())
+
+        self.car_tree.bind("<Double-1>",
+                           lambda event: self._handle_treeview_double_click(event, self.car_tree, edit_car_cell))
+
         # Скроллбары
         scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
         car_scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
 
-        # Размещение элементов
         self.tree.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
         self.car_tree.grid(row=3, column=0, sticky="nsew", padx=10, pady=(20, 10))
         scrollbar.grid(row=1, column=1, sticky="ns")
@@ -321,12 +371,20 @@ class MoneyTrackerApp:
 
         self.update_report()
 
+    def _handle_treeview_double_click(self, event, tree, edit_callback):
+        item = tree.identify_row(event.y)
+        column = tree.identify_column(event.x)
+        if not item or not column:
+            return
+        col_index = int(column[1:]) - 1
+        edit_callback(tree, item, col_index)
+
     def add_transaction(self):
         try:
-            operation = self.entries["Тип операции"].get()
-            amount = float(self.entries["Сумма"].get())
-            description = self.entries["Описание"].get().strip()
-            category = self.entries["Категория"].get()
+            operation = self.entries["Тип операции:"].get()
+            amount = float(self.entries["Сумма:"].get())
+            description = self.entries["Описание:"].get().strip()
+            category = self.entries["Категория:"].get()
 
             if not description:
                 messagebox.showerror("Ошибка", "Введите описание операции!")
@@ -346,9 +404,9 @@ class MoneyTrackerApp:
             self.transactions.append(transaction)
             self.save_data()
 
-            self.entries["Сумма"].delete(0, tk.END)
-            self.entries["Сумма"].insert(0, "0.00")
-            self.entries["Описание"].delete(0, tk.END)
+            self.entries["Сумма:"].delete(0, tk.END)
+            self.entries["Сумма:"].insert(0, "0.00")
+            self.entries["Описание:"].delete(0, tk.END)
 
             self.update_report()
             messagebox.showinfo("Успех", "Операция успешно добавлена!")
