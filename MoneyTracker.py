@@ -207,12 +207,12 @@ class MoneyTrackerApp:
         self.report_frame.grid_columnconfigure(0, weight=1)
         self.report_frame.grid_rowconfigure(1, weight=1)
 
-        # Стиль для увеличенной таблицы
+        # Стиль
         style = ttk.Style()
         style.configure("Treeview.Heading", font=self.large_font)
         style.configure("Treeview", font=self.large_font, rowheight=35)
 
-        # Таблица операций
+        # Колонки операций
         columns = {
             "#1": {"name": "date", "text": "Дата", "width": 180, "anchor": "center"},
             "#2": {"name": "type", "text": "Тип", "width": 120, "anchor": "center"},
@@ -222,33 +222,11 @@ class MoneyTrackerApp:
         }
 
         self.tree = ttk.Treeview(self.report_frame, columns=list(columns.keys()), show="headings")
-
         for col, params in columns.items():
             self.tree.heading(col, text=params["text"])
             self.tree.column(col, width=params["width"], anchor=params.get("anchor", "w"))
 
-        def edit_cell(tree, item, col_index):
-            x, y, width, height = tree.bbox(item, f"#{col_index + 1}")
-            value = tree.item(item, "values")[col_index]
-
-            entry = ctk.CTkEntry(tree, width=width, height=height)
-            entry.insert(0, value)
-            entry.place(x=x, y=y)
-
-            def save_edit(event=None):
-                new_val = entry.get()
-                values = list(tree.item(item, "values"))
-                values[col_index] = new_val
-                tree.item(item, values=values)
-                entry.destroy()
-
-            entry.bind("<Return>", save_edit)
-            entry.bind("<FocusOut>", lambda e: entry.destroy())
-            entry.focus_set()
-
-        self.tree.bind("<Double-1>", lambda event: self._handle_treeview_double_click(event, self.tree, edit_cell))
-
-        # Таблица авто-сделок
+        # Колонки авто-сделок
         car_columns = {
             "#1": {"name": "model", "text": "Модель", "width": 150, "anchor": "center"},
             "#2": {"name": "buy_date", "text": "Дата покупки", "width": 120, "anchor": "center"},
@@ -267,7 +245,6 @@ class MoneyTrackerApp:
         }
 
         self.car_tree = ttk.Treeview(self.report_frame, columns=list(car_columns.keys()), show="headings")
-
         for col, params in car_columns.items():
             self.car_tree.heading(col, text=params["text"])
             self.car_tree.column(col, width=params["width"], anchor=params.get("anchor", "w"))
@@ -303,12 +280,77 @@ class MoneyTrackerApp:
         for i, (name, text, value, font) in enumerate(summary_items):
             frame = ctk.CTkFrame(self.summary_panel, width=220)
             frame.grid(row=0, column=i, padx=5)
-
             ctk.CTkLabel(frame, text=text, font=self.large_font).pack()
             self.summary_labels[name] = ctk.CTkLabel(frame, text=value, font=font)
             self.summary_labels[name].pack()
 
         self.update_report()
+
+        # Редактирование
+        key_order = ["date", "type", "amount", "description", "category"]
+        car_key_order = [
+            "model", "buy_date", "buy_price", "buy_type", "seller_name",
+            "sell_date", "sell_price", "sell_type", "buyer_name", "on_commission",
+            "expenses", "expenses_type", "profit", "expenses_desc"
+        ]
+
+        self.tree.bind(
+            "<Double-1>",
+            lambda event: self._handle_treeview_double_click(
+                event,
+                self.tree,
+                lambda tree, item, col: self.edit_cell(tree, item, col, self.transactions, key_order)
+            )
+        )
+
+        self.car_tree.bind(
+            "<Double-1>",
+            lambda event: self._handle_treeview_double_click(
+                event,
+                self.car_tree,
+                lambda tree, item, col: self.edit_cell(tree, item, col, self.car_deals, car_key_order)
+            )
+        )
+
+    def edit_cell(self, tree, item, col_index, data_list, key_order):
+        x, y, width, height = tree.bbox(item, f"#{col_index + 1}")
+        value = tree.item(item, "values")[col_index]
+
+        entry = ctk.CTkEntry(tree, width=width, height=height)
+        entry.insert(0, value)
+        entry.place(x=x, y=y)
+
+        def save_edit(event=None):
+            new_val = entry.get()
+            values = list(tree.item(item, "values"))
+            values[col_index] = new_val
+            tree.item(item, values=values)
+            entry.destroy()
+
+            # Сохраняем в data_list
+            index = tree.index(item)
+
+            # Защита от выхода за границы
+            if index < len(data_list) and col_index < len(key_order):
+                key = key_order[col_index]
+
+                cleaned = new_val.replace(",", "")
+                try:
+                    if key in ["amount", "buy_price", "sell_price", "expenses", "profit"]:
+                        cleaned = float(cleaned)
+                except ValueError:
+                    pass
+
+                # Убедимся, что это словарь и нужный ключ есть
+                if isinstance(data_list[index], dict):
+                    data_list[index][key] = cleaned
+
+            self.save_data()
+            self.update_report()
+
+        entry.bind("<Return>", save_edit)
+        entry.bind("<FocusOut>", save_edit)
+        entry.focus_set()
 
     def _handle_treeview_double_click(self, event, tree, edit_callback):
         item = tree.identify_row(event.y)
