@@ -1,2 +1,1 @@
 model,buy_date,buy_price,buy_type,seller_name,sell_date,sell_price,sell_type,buyer_name,on_commission,expenses,expenses_type,profit,expenses_desc
-2,02.08.2025,1000000.0,Безнал,миша,02.08.2025,1200000.0,Наличные,Петя,Нет,200000.0,Наличные,0.0,турбна

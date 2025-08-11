@@ -312,6 +312,14 @@ class MoneyTrackerApp:
             )
         )
 
+    def get_data_list_by_iid(self, iid):
+        if iid.startswith("tr_"):
+            return self.transactions
+        elif iid.startswith("car_"):
+            return self.car_deals
+        else:
+            return None
+
     def edit_cell(self, tree, item, col_index, data_list, key_order):
         x, y, width, height = tree.bbox(item, f"#{col_index + 1}")
         value = tree.item(item, "values")[col_index]
@@ -327,13 +335,23 @@ class MoneyTrackerApp:
             tree.item(item, values=values)
             entry.destroy()
 
-            # Сохраняем в data_list
-            index = tree.index(item)
+            # получили реальный iid
+            iid = item
 
-            # Защита от выхода за границы
+            # выбрали нужный список
+            data_list = self.get_data_list_by_iid(iid)
+            if data_list is None:
+                return
+
+            # вычислили индекс записи
+            if iid.startswith("tr_") or iid.startswith("car_"):
+                index = int(iid.split("_")[1])
+            else:
+                index = int(iid)
+
+            # безопасный апдейт
             if index < len(data_list) and col_index < len(key_order):
                 key = key_order[col_index]
-
                 cleaned = new_val.replace(",", "")
                 try:
                     if key in ["amount", "buy_price", "sell_price", "expenses", "profit"]:
@@ -341,12 +359,12 @@ class MoneyTrackerApp:
                 except ValueError:
                     pass
 
-                # Убедимся, что это словарь и нужный ключ есть
-                if isinstance(data_list[index], dict):
-                    data_list[index][key] = cleaned
+                # меняем прямо в исходном словаре
+                data_list[index][key] = cleaned
 
             self.save_data()
             self.update_report()
+            self.update_summary()
 
         entry.bind("<Return>", save_edit)
         entry.bind("<FocusOut>", save_edit)
@@ -466,33 +484,43 @@ class MoneyTrackerApp:
             self.car_tree.delete(item)
 
         # Заполняем таблицу операций
-        for tr in sorted(self.transactions, key=lambda x: x["date"], reverse=True):
-            self.tree.insert("", "end", values=(
-                tr["date"],
-                tr["type"],
-                f"{abs(tr['amount']):,.2f}",
-                tr["description"],
-                tr["category"]
-            ))
+        for i, tr in enumerate(self.transactions):
+            self.tree.insert(
+                "",
+                "end",
+                iid=f"tr_{i}",
+                values=(
+                    tr["date"],
+                    tr["type"],
+                    f"{abs(tr['amount']):,.2f}",
+                    tr["description"],
+                    tr["category"]
+                )
+            )
 
         # Заполняем таблицу авто-сделок
-        for deal in self.car_deals:
-            self.car_tree.insert("", "end", values=(
-                deal["model"],
-                deal["buy_date"],
-                f"{deal['buy_price']:,.2f}",
-                deal["buy_type"],
-                deal.get("seller_name", ""),  # Новое поле
-                deal["sell_date"],
-                f"{deal['sell_price']:,.2f}",
-                deal["sell_type"],
-                deal.get("buyer_name", ""),  # Новое поле
-                deal.get("on_commission", "Нет"),  # Новое поле
-                f"{deal['expenses']:,.2f}",
-                deal["expenses_type"],
-                f"{deal['profit']:,.2f}",
-                deal["expenses_desc"]
-            ))
+        for i, deal in enumerate(self.car_deals):
+            self.car_tree.insert(
+                "",
+                "end",
+                iid=f"car_{i}",  # <-- тут даём индекс
+                values=(
+                    deal["model"],
+                    deal["buy_date"],
+                    f"{deal['buy_price']:,.2f}",
+                    deal["buy_type"],
+                    deal.get("seller_name", ""),
+                    deal["sell_date"],
+                    f"{deal['sell_price']:,.2f}",
+                    deal["sell_type"],
+                    deal.get("buyer_name", ""),
+                    deal.get("on_commission", "Нет"),
+                    f"{deal['expenses']:,.2f}",
+                    deal["expenses_type"],
+                    f"{deal['profit']:,.2f}",
+                    deal["expenses_desc"]
+                )
+            )
 
         # Обновляем итоги
         self.update_summary()
@@ -501,16 +529,10 @@ class MoneyTrackerApp:
         total_income = sum(t["amount"] for t in self.transactions if t["type"] == "Приход")
         total_expense = abs(sum(t["amount"] for t in self.transactions if t["type"] == "Расход"))
 
-        # Дополнительные вложения (расходы сверх начального капитала)
         additional_investment = max(0, total_expense - self.initial_capital)
-
-        # Прибыль с авто
         car_profit = sum(deal["profit"] for deal in self.car_deals)
+        total_profit = car_profit + total_income - additional_investment
 
-        # Общая прибыль
-        total_profit = car_profit + total_income - max(0, total_expense - self.initial_capital)
-
-        # Обновляем значения
         self.summary_labels["initial_capital"].configure(text=f"{self.initial_capital:,.2f} ₽")
         self.summary_labels["total_income"].configure(text=f"{total_income:,.2f} ₽")
         self.summary_labels["total_expense"].configure(text=f"{total_expense:,.2f} ₽")
