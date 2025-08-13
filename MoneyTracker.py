@@ -1,13 +1,208 @@
 import tkinter as tk
 import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog
-import csv
 from datetime import datetime
-import pandas as pd
+from openpyxl import Workbook, load_workbook
 
 # Настройка тем - принудительно темная
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue")
+
+
+import sqlite3
+import pandas as pd
+from typing import List, Dict
+
+
+class DatabaseManager:
+    def __init__(self, db_file="money_tracker.db"):
+        self.db_name = db_file
+        self.conn = sqlite3.connect(self.db_name, check_same_thread=False)
+        self.conn.row_factory = sqlite3.Row
+        self.create_tables()
+
+    def create_tables(self):
+        cursor = self.conn.cursor()
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS transactions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                date TEXT NOT NULL,
+                type TEXT NOT NULL,
+                amount REAL NOT NULL,
+                description TEXT NOT NULL,
+                category TEXT NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS car_deals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                model TEXT NOT NULL,
+                buy_date TEXT NOT NULL,
+                buy_price REAL NOT NULL,
+                buy_type TEXT NOT NULL,
+                seller_name TEXT,
+                sell_date TEXT NOT NULL,
+                sell_price REAL NOT NULL,
+                sell_type TEXT NOT NULL,
+                buyer_name TEXT,
+                on_commission TEXT NOT NULL,
+                expenses REAL NOT NULL,
+                expenses_type TEXT NOT NULL,
+                expenses_desc TEXT,
+                profit REAL NOT NULL
+            )
+        """)
+
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                initial_capital REAL NOT NULL DEFAULT 0
+            )
+        """)
+
+        cursor.execute("SELECT COUNT(*) FROM settings")
+        if cursor.fetchone()[0] == 0:
+            cursor.execute("INSERT INTO settings (initial_capital) VALUES (0)")
+
+        self.conn.commit()
+
+    # ---------------- Транзакции ----------------
+    def add_transaction(self, transaction: Dict) -> int:
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO transactions (date, type, amount, description, category)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            transaction["date"],
+            transaction["type"],
+            transaction["amount"],
+            transaction["description"],
+            transaction["category"]
+        ))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_all_transactions(self) -> List[Dict]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM transactions ORDER BY date DESC")
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_transaction(self, transaction_id: int, updates: Dict) -> bool:
+        if not updates:
+            return False
+        cursor = self.conn.cursor()
+        set_clause = ", ".join(f"{key} = ?" for key in updates.keys())
+        values = list(updates.values()) + [transaction_id]
+        cursor.execute(f"UPDATE transactions SET {set_clause} WHERE id = ?", values)
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    # ---------------- Авто-сделки ----------------
+    def add_car_deal(self, car_deal: Dict) -> int:
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            INSERT INTO car_deals (
+                model, buy_date, buy_price, buy_type, seller_name,
+                sell_date, sell_price, sell_type, buyer_name, on_commission,
+                expenses, expenses_type, expenses_desc, profit
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            car_deal["model"],
+            car_deal["buy_date"],
+            car_deal["buy_price"],
+            car_deal["buy_type"],
+            car_deal.get("seller_name", ""),
+            car_deal["sell_date"],
+            car_deal["sell_price"],
+            car_deal["sell_type"],
+            car_deal.get("buyer_name", ""),
+            car_deal["on_commission"],
+            car_deal["expenses"],
+            car_deal["expenses_type"],
+            car_deal.get("expenses_desc", ""),
+            car_deal["profit"]
+        ))
+        self.conn.commit()
+        return cursor.lastrowid
+
+    def get_all_car_deals(self) -> List[Dict]:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT * FROM car_deals ORDER BY buy_date DESC")
+        return [dict(row) for row in cursor.fetchall()]
+
+    def update_car_deal(self, deal_id: int, updates: Dict) -> bool:
+        if not updates:
+            return False
+        cursor = self.conn.cursor()
+        set_clause = ", ".join(f"{key} = ?" for key in updates.keys())
+        values = list(updates.values()) + [deal_id]
+        cursor.execute(f"UPDATE car_deals SET {set_clause} WHERE id = ?", values)
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    # ---------------- Настройки ----------------
+    def get_initial_capital(self) -> float:
+        cursor = self.conn.cursor()
+        cursor.execute("SELECT initial_capital FROM settings LIMIT 1")
+        result = cursor.fetchone()
+        return result[0] if result else 0.0
+
+    def update_initial_capital(self, amount: float) -> bool:
+        cursor = self.conn.cursor()
+        cursor.execute("UPDATE settings SET initial_capital = ?", (amount,))
+        self.conn.commit()
+        return cursor.rowcount > 0
+
+    # ---------------- Экспорт / импорт ----------------
+    def export_to_excel(self, file_path: str) -> bool:
+        try:
+            with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
+                transactions = self.get_all_transactions()
+                if transactions:
+                    pd.DataFrame(transactions).to_excel(writer, sheet_name="Transactions", index=False)
+
+                car_deals = self.get_all_car_deals()
+                if car_deals:
+                    pd.DataFrame(car_deals).to_excel(writer, sheet_name="CarDeals", index=False)
+
+                pd.DataFrame([{"initial_capital": self.get_initial_capital()}]).to_excel(
+                    writer, sheet_name="Config", index=False
+                )
+            return True
+        except Exception as e:
+            print(f"Ошибка при экспорте: {e}")
+            return False
+
+    def import_from_excel(self, file_path: str) -> bool:
+        try:
+            with pd.ExcelFile(file_path) as xls:
+                if "Transactions" in xls.sheet_names:
+                    df = pd.read_excel(xls, sheet_name="Transactions")
+                    for _, row in df.iterrows():
+                        self.add_transaction(row.to_dict())
+
+                if "CarDeals" in xls.sheet_names:
+                    df = pd.read_excel(xls, sheet_name="CarDeals")
+                    for _, row in df.iterrows():
+                        self.add_car_deal(row.to_dict())
+
+                if "Config" in xls.sheet_names:
+                    df = pd.read_excel(xls, sheet_name="Config")
+                    if "initial_capital" in df.columns:
+                        self.update_initial_capital(float(df.iloc[0]["initial_capital"]))
+            return True
+        except Exception as e:
+            print(f"Ошибка при импорте: {e}")
+            return False
+
+    # ---------------- Закрытие соединения ----------------
+    def close(self):
+        if self.conn:
+            self.conn.close()
+            self.conn = None
+
 
 
 class MoneyTrackerApp:
@@ -20,10 +215,13 @@ class MoneyTrackerApp:
         self.xlarge_font = ("Arial", 16, "bold")
         self.xxlarge_font = ("Arial", 18, "bold")
 
-        self.transactions = []
-        self.car_deals = []
-        self.initial_capital = 0
-        self.load_data()
+        # Инициализация менеджера базы данных
+        self.db = DatabaseManager()
+
+        # Загрузка данных
+        self.transactions = self.db.get_all_transactions()
+        self.car_deals = self.db.get_all_car_deals()
+        self.initial_capital = self.db.get_initial_capital()
 
         self.setup_ui()
 
@@ -96,7 +294,6 @@ class MoneyTrackerApp:
             entry.grid(row=row, column=1, sticky="ew", pady=5, padx=10)
             self.entries[label] = entry
 
-        # 👇 Добавляем кнопку после всех полей
         ctk.CTkButton(
             self.add_frame,
             text="Добавить операцию",
@@ -117,12 +314,12 @@ class MoneyTrackerApp:
             ("Дата покупки:", "entry", None, datetime.now().strftime("%d.%m.%Y")),
             ("Цена покупки:", "entry", None, "0.00"),
             ("Тип оплаты покупки:", "combobox", ["Наличные", "Безнал", "Другое"], "Наличные"),
-            ("ФИО продавца:", "entry", None, ""),  # Новое необязательное поле
+            ("ФИО продавца:", "entry", None, ""),
             ("Дата продажи:", "entry", None, datetime.now().strftime("%d.%m.%Y")),
             ("Цена продажи:", "entry", None, "0.00"),
             ("Тип оплаты продажи:", "combobox", ["Наличные", "Безнал", "Другое"], "Наличные"),
-            ("ФИО покупателя:", "entry", None, ""),  # Новое необязательное поле
-            ("На комиссии:", "combobox", ["Да", "Нет"], "Нет"),  # Новое поле
+            ("ФИО покупателя:", "entry", None, ""),
+            ("На комиссии:", "combobox", ["Да", "Нет"], "Нет"),
             ("Доп. расходы:", "entry", None, "0.00"),
             ("Тип оплаты расходов:", "combobox", ["Наличные", "Безнал", "Другое"], "Наличные"),
             ("Описание расходов:", "entry", None, "")
@@ -152,67 +349,14 @@ class MoneyTrackerApp:
             height=40
         ).grid(row=len(car_fields) + 1, column=0, columnspan=2, pady=20, sticky="we")
 
-    def setup_settings_frame(self):
-        ctk.CTkLabel(self.settings_frame, text="Стартовый капитал:", font=self.large_font).pack(pady=(20, 5))
-        self.capital_entry = ctk.CTkEntry(self.settings_frame)
-        self.capital_entry.insert(0, str(self.initial_capital))
-        self.capital_entry.pack()
-
-        def save_capital():
-            try:
-                self.initial_capital = float(self.capital_entry.get())
-                self.save_data()
-                messagebox.showinfo("Сохранено", "Стартовый капитал обновлён.")
-            except ValueError:
-                messagebox.showerror("Ошибка", "Введите число.")
-
-        ctk.CTkButton(self.settings_frame, text="💾 Сохранить капитал", command=save_capital).pack(pady=10)
-        ctk.CTkButton(self.settings_frame, text="📥 Импорт из Excel", command=self.import_from_excel).pack(pady=10)
-        ctk.CTkButton(self.settings_frame, text="📤 Экспорт в Excel", command=self.export_to_excel).pack(pady=10)
-
-    def import_from_excel(self):
-        path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
-        if not path:
-            return
-        try:
-            df = pd.read_excel(path, sheet_name=None)
-            if "Transactions" in df:
-                self.transactions = df["Transactions"].to_dict("records")
-            if "CarDeals" in df:
-                self.car_deals = df["CarDeals"].to_dict("records")
-            if "Config" in df and "initial_capital" in df["Config"].columns:
-                self.initial_capital = df["Config"].iloc[0]["initial_capital"]
-                self.capital_entry.delete(0, tk.END)
-                self.capital_entry.insert(0, str(self.initial_capital))
-            self.save_data()
-            self.update_report()
-            messagebox.showinfo("Успех", "Данные успешно импортированы из Excel.")
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка при импорте: {e}")
-
-    def export_to_excel(self):
-        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")])
-        if not path:
-            return
-        try:
-            with pd.ExcelWriter(path, engine="openpyxl") as writer:
-                pd.DataFrame(self.transactions).to_excel(writer, sheet_name="Transactions", index=False)
-                pd.DataFrame(self.car_deals).to_excel(writer, sheet_name="CarDeals", index=False)
-                pd.DataFrame([{"initial_capital": self.initial_capital}]).to_excel(writer, sheet_name="Config", index=False)
-            messagebox.showinfo("Успех", "Данные успешно экспортированы в Excel.")
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка при экспорте: {e}")
-
     def setup_report_frame(self):
         self.report_frame.grid_columnconfigure(0, weight=1)
         self.report_frame.grid_rowconfigure(1, weight=1)
 
-        # Стиль
         style = ttk.Style()
         style.configure("Treeview.Heading", font=self.large_font)
         style.configure("Treeview", font=self.large_font, rowheight=35)
 
-        # Колонки операций
         columns = {
             "#1": {"name": "date", "text": "Дата", "width": 180, "anchor": "center"},
             "#2": {"name": "type", "text": "Тип", "width": 120, "anchor": "center"},
@@ -226,7 +370,6 @@ class MoneyTrackerApp:
             self.tree.heading(col, text=params["text"])
             self.tree.column(col, width=params["width"], anchor=params.get("anchor", "w"))
 
-        # Колонки авто-сделок
         car_columns = {
             "#1": {"name": "model", "text": "Модель", "width": 150, "anchor": "center"},
             "#2": {"name": "buy_date", "text": "Дата покупки", "width": 120, "anchor": "center"},
@@ -249,7 +392,6 @@ class MoneyTrackerApp:
             self.car_tree.heading(col, text=params["text"])
             self.car_tree.column(col, width=params["width"], anchor=params.get("anchor", "w"))
 
-        # Скроллбары
         scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
         car_scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
 
@@ -263,7 +405,6 @@ class MoneyTrackerApp:
         scrollbar.configure(command=self.tree.yview)
         car_scrollbar.configure(command=self.car_tree.yview)
 
-        # Панель итогов
         self.summary_panel = ctk.CTkFrame(self.report_frame)
         self.summary_panel.grid(row=4, column=0, columnspan=2, sticky="we", padx=10, pady=10)
 
@@ -286,7 +427,6 @@ class MoneyTrackerApp:
 
         self.update_report()
 
-        # Редактирование
         key_order = ["date", "type", "amount", "description", "category"]
         car_key_order = [
             "model", "buy_date", "buy_price", "buy_type", "seller_name",
@@ -312,6 +452,25 @@ class MoneyTrackerApp:
             )
         )
 
+    def setup_settings_frame(self):
+        ctk.CTkLabel(self.settings_frame, text="Стартовый капитал:", font=self.large_font).pack(pady=(20, 5))
+        self.capital_entry = ctk.CTkEntry(self.settings_frame)
+        self.capital_entry.insert(0, str(self.initial_capital))
+        self.capital_entry.pack()
+
+        def save_capital():
+            try:
+                self.initial_capital = float(self.capital_entry.get())
+                self.db.update_initial_capital(self.initial_capital)
+                messagebox.showinfo("Сохранено", "Стартовый капитал обновлён.")
+                self.update_report()
+            except ValueError:
+                messagebox.showerror("Ошибка", "Введите число.")
+
+        ctk.CTkButton(self.settings_frame, text="💾 Сохранить капитал", command=save_capital).pack(pady=10)
+        ctk.CTkButton(self.settings_frame, text="📥 Импорт из Excel", command=self.import_from_excel).pack(pady=10)
+        ctk.CTkButton(self.settings_frame, text="📤 Экспорт в Excel", command=self.export_to_excel).pack(pady=10)
+
     def get_data_list_by_iid(self, iid):
         if iid.startswith("tr_"):
             return self.transactions
@@ -335,21 +494,16 @@ class MoneyTrackerApp:
             tree.item(item, values=values)
             entry.destroy()
 
-            # получили реальный iid
             iid = item
-
-            # выбрали нужный список
             data_list = self.get_data_list_by_iid(iid)
             if data_list is None:
                 return
 
-            # вычислили индекс записи
             if iid.startswith("tr_") or iid.startswith("car_"):
                 index = int(iid.split("_")[1])
             else:
                 index = int(iid)
 
-            # безопасный апдейт
             if index < len(data_list) and col_index < len(key_order):
                 key = key_order[col_index]
                 cleaned = new_val.replace(",", "")
@@ -359,12 +513,14 @@ class MoneyTrackerApp:
                 except ValueError:
                     pass
 
-                # меняем прямо в исходном словаре
                 data_list[index][key] = cleaned
 
-            self.save_data()
+            if iid.startswith("tr_"):
+                self.db.update_transaction(data_list[index]["id"], {key: cleaned})
+            elif iid.startswith("car_"):
+                self.db.update_car_deal(data_list[index]["id"], {key: cleaned})
+
             self.update_report()
-            self.update_summary()
 
         entry.bind("<Return>", save_edit)
         entry.bind("<FocusOut>", save_edit)
@@ -400,8 +556,8 @@ class MoneyTrackerApp:
                 "category": category
             }
 
-            self.transactions.append(transaction)
-            self.save_data()
+            self.db.add_transaction(transaction)
+            self.transactions = self.db.get_all_transactions()
 
             self.entries["Сумма:"].delete(0, tk.END)
             self.entries["Сумма:"].insert(0, "0.00")
@@ -419,12 +575,12 @@ class MoneyTrackerApp:
             buy_date = self.car_entries["Дата покупки"].get().strip()
             buy_price = float(self.car_entries["Цена покупки"].get())
             buy_type = self.car_entries["Тип оплаты покупки"].get()
-            seller_name = self.car_entries["ФИО продавца"].get().strip()  # Новое поле
+            seller_name = self.car_entries["ФИО продавца"].get().strip()
             sell_date = self.car_entries["Дата продажи"].get().strip()
             sell_price = float(self.car_entries["Цена продажи"].get())
             sell_type = self.car_entries["Тип оплаты продажи"].get()
-            buyer_name = self.car_entries["ФИО покупателя"].get().strip()  # Новое поле
-            on_commission = self.car_entries["На комиссии"].get()  # Новое поле
+            buyer_name = self.car_entries["ФИО покупателя"].get().strip()
+            on_commission = self.car_entries["На комиссии"].get()
             expenses = float(self.car_entries["Доп. расходы"].get())
             expenses_type = self.car_entries["Тип оплаты расходов"].get()
             expenses_desc = self.car_entries["Описание расходов"].get().strip()
@@ -440,27 +596,26 @@ class MoneyTrackerApp:
                 "buy_date": buy_date,
                 "buy_price": buy_price,
                 "buy_type": buy_type,
-                "seller_name": seller_name,  # Новое поле
+                "seller_name": seller_name,
                 "sell_date": sell_date,
                 "sell_price": sell_price,
                 "sell_type": sell_type,
-                "buyer_name": buyer_name,  # Новое поле
-                "on_commission": on_commission,  # Новое поле
+                "buyer_name": buyer_name,
+                "on_commission": on_commission,
                 "expenses": expenses,
                 "expenses_type": expenses_type,
-                "profit": profit,
-                "expenses_desc": expenses_desc
+                "expenses_desc": expenses_desc,
+                "profit": profit
             }
 
-            self.car_deals.append(car_deal)
-            self.save_data()
+            self.db.add_car_deal(car_deal)
+            self.car_deals = self.db.get_all_car_deals()
 
-            # Очищаем поля
             for entry in self.car_entries.values():
                 if isinstance(entry, ctk.CTkEntry):
                     entry.delete(0, tk.END)
                 elif isinstance(entry, ctk.CTkComboBox):
-                    entry.set("Наличные")  # Сбрасываем на значение по умолчанию
+                    entry.set("Наличные")
 
             self.update_report()
             messagebox.showinfo("Успех", "Авто-сделка успешно добавлена!")
@@ -468,22 +623,12 @@ class MoneyTrackerApp:
         except ValueError:
             messagebox.showerror("Ошибка", "Введите корректные числовые значения!")
 
-    def save_settings(self):
-        try:
-            self.initial_capital = float(self.initial_capital_entry.get().replace(",", ""))
-            messagebox.showinfo("Успех", "Настройки успешно сохранены!")
-            self.update_report()
-        except ValueError:
-            messagebox.showerror("Ошибка", "Введите корректную сумму начального капитала!")
-
     def update_report(self):
-        # Очищаем таблицы
         for item in self.tree.get_children():
             self.tree.delete(item)
         for item in self.car_tree.get_children():
             self.car_tree.delete(item)
 
-        # Заполняем таблицу операций
         for i, tr in enumerate(self.transactions):
             self.tree.insert(
                 "",
@@ -498,12 +643,11 @@ class MoneyTrackerApp:
                 )
             )
 
-        # Заполняем таблицу авто-сделок
         for i, deal in enumerate(self.car_deals):
             self.car_tree.insert(
                 "",
                 "end",
-                iid=f"car_{i}",  # <-- тут даём индекс
+                iid=f"car_{i}",
                 values=(
                     deal["model"],
                     deal["buy_date"],
@@ -522,7 +666,6 @@ class MoneyTrackerApp:
                 )
             )
 
-        # Обновляем итоги
         self.update_summary()
 
     def update_summary(self):
@@ -540,79 +683,31 @@ class MoneyTrackerApp:
         self.summary_labels["car_profit"].configure(text=f"{car_profit:,.2f} ₽")
         self.summary_labels["total_profit"].configure(text=f"{total_profit:,.2f} ₽")
 
-    def load_data(self):
+    def import_from_excel(self):
+        path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
+        if not path:
+            return
         try:
-            # Загрузка обычных операций
-            with open("transactions.csv", "r", newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                self.transactions = [{
-                    "date": row["date"],
-                    "type": row["type"],
-                    "amount": float(row["amount"]),
-                    "description": row["description"],
-                    "category": row["category"]
-                } for row in reader]
-
-            # Загрузка авто-сделок
-            with open("car_deals.csv", "r", newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                self.car_deals = [{
-                    "model": row["model"],
-                    "buy_date": row["buy_date"],
-                    "buy_price": float(row["buy_price"]),
-                    "buy_type": row.get("buy_type", "Наличные"),
-                    "seller_name": row.get("seller_name", ""),  # Новое поле
-                    "sell_date": row["sell_date"],
-                    "sell_price": float(row["sell_price"]),
-                    "sell_type": row.get("sell_type", "Наличные"),
-                    "buyer_name": row.get("buyer_name", ""),  # Новое поле
-                    "on_commission": row.get("on_commission", "Нет"),  # Новое поле
-                    "expenses": float(row["expenses"]),
-                    "expenses_type": row.get("expenses_type", "Наличные"),
-                    "profit": float(row["profit"]),
-                    "expenses_desc": row["expenses_desc"]
-                } for row in reader]
-
-            # Загрузка начального капитала
-            with open("settings.csv", "r", newline="", encoding="utf-8") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
-                    self.initial_capital = float(row.get("initial_capital", 0))
-
-        except FileNotFoundError:
-            self.transactions = []
-            self.car_deals = []
+            if self.db.import_from_excel(path):
+                self.transactions = self.db.get_all_transactions()
+                self.car_deals = self.db.get_all_car_deals()
+                self.initial_capital = self.db.get_initial_capital()
+                self.capital_entry.delete(0, tk.END)
+                self.capital_entry.insert(0, str(self.initial_capital))
+                self.update_report()
+                messagebox.showinfo("Успех", "Данные успешно импортированы из Excel.")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось загрузить данные: {str(e)}")
-            self.transactions = []
-            self.car_deals = []
+            messagebox.showerror("Ошибка", f"Ошибка при импорте: {e}")
 
-    def save_data(self):
+    def export_to_excel(self):
+        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")])
+        if not path:
+            return
         try:
-            # Сохранение обычных операций
-            with open("transactions.csv", "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=["date", "type", "amount", "description", "category"])
-                writer.writeheader()
-                writer.writerows(self.transactions)
-
-            # Сохранение авто-сделок
-            with open("car_deals.csv", "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=[
-                    "model", "buy_date", "buy_price", "buy_type", "seller_name",
-                    "sell_date", "sell_price", "sell_type", "buyer_name", "on_commission",
-                    "expenses", "expenses_type", "profit", "expenses_desc"
-                ])
-                writer.writeheader()
-                writer.writerows(self.car_deals)
-
-            # Сохранение настроек
-            with open("settings.csv", "w", newline="", encoding="utf-8") as f:
-                writer = csv.DictWriter(f, fieldnames=["initial_capital"])
-                writer.writeheader()
-                writer.writerow({"initial_capital": self.initial_capital})
-
+            if self.db.export_to_excel(path):
+                messagebox.showinfo("Успех", "Данные успешно экспортированы в Excel.")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось сохранить данные: {str(e)}")
+            messagebox.showerror("Ошибка", f"Ошибка при экспорте: {e}")
 
 
 if __name__ == "__main__":
