@@ -2,7 +2,7 @@ import tkinter as tk
 import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
-from openpyxl import Workbook, load_workbook
+
 
 # Настройка тем - принудительно темная
 ctk.set_appearance_mode("Dark")
