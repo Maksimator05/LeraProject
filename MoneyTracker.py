@@ -3,11 +3,9 @@ import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
 
-
 # Настройка тем - принудительно темная
 ctk.set_appearance_mode("Dark")
 ctk.set_default_color_theme("dark-blue")
-
 
 import sqlite3
 import pandas as pd
@@ -38,20 +36,13 @@ class DatabaseManager:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS car_deals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                model TEXT NOT NULL,
-                buy_date TEXT NOT NULL,
-                buy_price REAL NOT NULL,
-                buy_type TEXT NOT NULL,
-                seller_name TEXT,
-                sell_date TEXT NOT NULL,
-                sell_price REAL NOT NULL,
-                sell_type TEXT NOT NULL,
-                buyer_name TEXT,
-                on_commission TEXT NOT NULL,
-                expenses REAL NOT NULL,
-                expenses_type TEXT NOT NULL,
-                expenses_desc TEXT,
-                profit REAL NOT NULL
+                brand TEXT NOT NULL,
+                year TEXT NOT NULL,
+                vin TEXT NOT NULL,
+                comment TEXT,
+                price REAL DEFAULT 0,
+                cost REAL DEFAULT 0,
+                header REAL DEFAULT 0
             )
         """)
 
@@ -104,32 +95,23 @@ class DatabaseManager:
         cursor = self.conn.cursor()
         cursor.execute("""
             INSERT INTO car_deals (
-                model, buy_date, buy_price, buy_type, seller_name,
-                sell_date, sell_price, sell_type, buyer_name, on_commission,
-                expenses, expenses_type, expenses_desc, profit
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                brand, year, vin, comment, price, cost, header
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
         """, (
-            car_deal["model"],
-            car_deal["buy_date"],
-            car_deal["buy_price"],
-            car_deal["buy_type"],
-            car_deal.get("seller_name", ""),
-            car_deal["sell_date"],
-            car_deal["sell_price"],
-            car_deal["sell_type"],
-            car_deal.get("buyer_name", ""),
-            car_deal["on_commission"],
-            car_deal["expenses"],
-            car_deal["expenses_type"],
-            car_deal.get("expenses_desc", ""),
-            car_deal["profit"]
+            car_deal["brand"],
+            car_deal["year"],
+            car_deal["vin"],
+            car_deal.get("comment", ""),
+            car_deal.get("price", 0),
+            car_deal.get("cost", 0),
+            car_deal.get("header", 0)
         ))
         self.conn.commit()
         return cursor.lastrowid
 
     def get_all_car_deals(self) -> List[Dict]:
         cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM car_deals ORDER BY buy_date DESC")
+        cursor.execute("SELECT * FROM car_deals ORDER BY year DESC")
         return [dict(row) for row in cursor.fetchall()]
 
     def update_car_deal(self, deal_id: int, updates: Dict) -> bool:
@@ -159,16 +141,40 @@ class DatabaseManager:
     def export_to_excel(self, file_path: str) -> bool:
         try:
             with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
+                # Экспорт транзакций
                 transactions = self.get_all_transactions()
                 if transactions:
-                    pd.DataFrame(transactions).to_excel(writer, sheet_name="Transactions", index=False)
+                    pd.DataFrame(transactions).to_excel(
+                        writer,
+                        sheet_name="Транзакции",
+                        index=False,
+                        columns=["date", "type", "amount", "description", "category"]
+                    )
 
+                # Экспорт авто-сделок
                 car_deals = self.get_all_car_deals()
                 if car_deals:
-                    pd.DataFrame(car_deals).to_excel(writer, sheet_name="CarDeals", index=False)
+                    # Создаем DataFrame с нужными колонками
+                    df_car_deals = pd.DataFrame(car_deals)
+                    # Переименовываем колонки для удобства
+                    df_car_deals = df_car_deals.rename(columns={
+                        "year": "Год",
+                        "header": "Прибыль"
+                    })
+                    # Выбираем нужные колонки в правильном порядке
+                    df_car_deals.to_excel(
+                        writer,
+                        sheet_name="Авто-сделки",
+                        index=False,
+                        columns=["brand", "Год", "vin", "price", "cost", "Прибыль", "comment"]
+                    )
 
-                pd.DataFrame([{"initial_capital": self.get_initial_capital()}]).to_excel(
-                    writer, sheet_name="Config", index=False
+                # Экспорт настроек
+                settings_data = {
+                    "initial_capital": [self.get_initial_capital()]
+                }
+                pd.DataFrame(settings_data).to_excel(
+                    writer, sheet_name="Настройки", index=False
                 )
             return True
         except Exception as e:
@@ -204,11 +210,10 @@ class DatabaseManager:
             self.conn = None
 
 
-
 class MoneyTrackerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("💰 Авто-Трекер Финансов v2.2")
+        self.root.title("💰 Авто-Трекер Финансов v2.4")
         self.root.geometry("1300x900")
 
         self.large_font = ("Arial", 14)
@@ -267,11 +272,12 @@ class MoneyTrackerApp:
         self.notebook.add(self.settings_frame, text="⚙️ Настройки")
         self.setup_settings_frame()
 
+        self.setup_context_menus()
+
     def setup_add_frame(self):
         self.add_frame.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(self.add_frame, text="Новая операция", font=self.large_font).grid(row=0, column=0, columnspan=2,
                                                                                        pady=(0, 20))
-
         fields = [
             ("Тип операции:", "combobox", ["Приход", "Расход"], "Приход"),
             ("Сумма:", "entry", None, "0.00"),
@@ -310,19 +316,12 @@ class MoneyTrackerApp:
             row=0, column=0, columnspan=2, pady=(0, 20))
 
         car_fields = [
-            ("Модель авто:", "entry", None, ""),
-            ("Дата покупки:", "entry", None, datetime.now().strftime("%d.%m.%Y")),
-            ("Цена покупки:", "entry", None, "0.00"),
-            ("Тип оплаты покупки:", "combobox", ["Наличные", "Безнал", "Другое"], "Наличные"),
-            ("ФИО продавца:", "entry", None, ""),
-            ("Дата продажи:", "entry", None, datetime.now().strftime("%d.%m.%Y")),
-            ("Цена продажи:", "entry", None, "0.00"),
-            ("Тип оплаты продажи:", "combobox", ["Наличные", "Безнал", "Другое"], "Наличные"),
-            ("ФИО покупателя:", "entry", None, ""),
-            ("На комиссии:", "combobox", ["Да", "Нет"], "Нет"),
-            ("Доп. расходы:", "entry", None, "0.00"),
-            ("Тип оплаты расходов:", "combobox", ["Наличные", "Безнал", "Другое"], "Наличные"),
-            ("Описание расходов:", "entry", None, "")
+            ("Марка:", "entry", None, ""),
+            ("Год:", "entry", None, ""),
+            ("VIN:", "entry", None, ""),
+            ("Цена:", "entry", None, "0"),
+            ("Стоимость:", "entry", None, "0"),
+            ("Комментарий:", "entry", None, "")
         ]
 
         self.car_entries = {}
@@ -330,13 +329,8 @@ class MoneyTrackerApp:
             ctk.CTkLabel(self.car_frame, text=label).grid(
                 row=row, column=0, padx=10, pady=5, sticky="e")
 
-            if field_type == "combobox":
-                entry = ctk.CTkComboBox(self.car_frame, values=options)
-                entry.set(default)
-            else:
-                entry = ctk.CTkEntry(self.car_frame)
-                entry.insert(0, default)
-
+            entry = ctk.CTkEntry(self.car_frame)
+            entry.insert(0, default)
             entry.grid(row=row, column=1, padx=10, pady=5, sticky="we")
             self.car_entries[label.replace(":", "")] = entry
 
@@ -371,27 +365,19 @@ class MoneyTrackerApp:
             self.tree.column(col, width=params["width"], anchor=params.get("anchor", "w"))
 
         car_columns = {
-            "#1": {"name": "model", "text": "Модель", "width": 150, "anchor": "center"},
-            "#2": {"name": "buy_date", "text": "Дата покупки", "width": 120, "anchor": "center"},
-            "#3": {"name": "buy_price", "text": "Цена покупки", "width": 120, "anchor": "e"},
-            "#4": {"name": "buy_type", "text": "Оплата покупки", "width": 120, "anchor": "center"},
-            "#5": {"name": "seller_name", "text": "Продавец", "width": 150, "anchor": "center"},
-            "#6": {"name": "sell_date", "text": "Дата продажи", "width": 120, "anchor": "center"},
-            "#7": {"name": "sell_price", "text": "Цена продажи", "width": 120, "anchor": "e"},
-            "#8": {"name": "sell_type", "text": "Оплата продажи", "width": 120, "anchor": "center"},
-            "#9": {"name": "buyer_name", "text": "Покупатель", "width": 150, "anchor": "center"},
-            "#10": {"name": "on_commission", "text": "Комиссия", "width": 100, "anchor": "center"},
-            "#11": {"name": "expenses", "text": "Доп. расходы", "width": 120, "anchor": "e"},
-            "#12": {"name": "expenses_type", "text": "Оплата расходов", "width": 120, "anchor": "center"},
-            "#13": {"name": "profit", "text": "Прибыль", "width": 120, "anchor": "e"},
-            "#14": {"name": "expenses_desc", "text": "Описание расходов", "width": 200}
+            "#1": {"name": "brand", "text": "Марка", "width": 120, "anchor": "center"},
+            "#2": {"name": "model_year", "text": "Год", "width": 80, "anchor": "center"},
+            "#3": {"name": "vin", "text": "VIN", "width": 150, "anchor": "center"},
+            "#4": {"name": "price", "text": "Цена", "width": 120, "anchor": "e"},
+            "#5": {"name": "comment", "text": "Комментарий", "width": 200},
+            "#6": {"name": "cost", "text": "Стоимость", "width": 120, "anchor": "e"},
+            "#7": {"name": "profit", "text": "Прибыль", "width": 120, "anchor": "e"}
         }
 
         self.car_tree = ttk.Treeview(self.report_frame, columns=list(car_columns.keys()), show="headings")
         for col, params in car_columns.items():
             self.car_tree.heading(col, text=params["text"])
             self.car_tree.column(col, width=params["width"], anchor=params.get("anchor", "w"))
-
         scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
         car_scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
 
@@ -428,11 +414,7 @@ class MoneyTrackerApp:
         self.update_report()
 
         key_order = ["date", "type", "amount", "description", "category"]
-        car_key_order = [
-            "model", "buy_date", "buy_price", "buy_type", "seller_name",
-            "sell_date", "sell_price", "sell_type", "buyer_name", "on_commission",
-            "expenses", "expenses_type", "profit", "expenses_desc"
-        ]
+        car_key_order = ["brand", "year", "vin", "cost", "price", "header"]
 
         self.tree.bind(
             "<Double-1>",
@@ -508,17 +490,47 @@ class MoneyTrackerApp:
                 key = key_order[col_index]
                 cleaned = new_val.replace(",", "")
                 try:
-                    if key in ["amount", "buy_price", "sell_price", "expenses", "profit"]:
+                    if key in ["amount", "price", "cost", "header"]:
                         cleaned = float(cleaned)
                 except ValueError:
                     pass
 
                 data_list[index][key] = cleaned
 
+            # Приход/расход
             if iid.startswith("tr_"):
                 self.db.update_transaction(data_list[index]["id"], {key: cleaned})
+
+            # Авто-сделка
             elif iid.startswith("car_"):
-                self.db.update_car_deal(data_list[index]["id"], {key: cleaned})
+                if key in ["price", "cost"]:
+                    # Пересчитываем прибыль при изменении цены или стоимости
+                    price = float(data_list[index].get("price", 0))
+                    cost = float(data_list[index].get("cost", 0))
+                    header = price - cost
+                    data_list[index]["header"] = header
+
+                    self.db.update_car_deal(data_list[index]["id"], {
+                        **data_list[index],
+                        "header": header
+                    })
+                else:
+                    self.db.update_car_deal(data_list[index]["id"], {key: cleaned})
+
+                # Обновляем таблицу
+                self.car_tree.delete(*self.car_tree.get_children())
+                for i, deal in enumerate(self.car_deals):
+                    self.car_tree.insert(
+                        "", "end", iid=f"car_{i}",
+                        values=(
+                            deal.get("brand", ""),
+                            deal.get("year", ""),
+                            deal.get("vin", ""),
+                            f"{deal.get('cost', 0):,.2f}",
+                            "",
+                            f"{deal.get('header', 0):,.2f}"
+                        )
+                    )
 
             self.update_report()
 
@@ -571,57 +583,36 @@ class MoneyTrackerApp:
 
     def add_car_deal(self):
         try:
-            model = self.car_entries["Модель авто"].get().strip()
-            buy_date = self.car_entries["Дата покупки"].get().strip()
-            buy_price = float(self.car_entries["Цена покупки"].get())
-            buy_type = self.car_entries["Тип оплаты покупки"].get()
-            seller_name = self.car_entries["ФИО продавца"].get().strip()
-            sell_date = self.car_entries["Дата продажи"].get().strip()
-            sell_price = float(self.car_entries["Цена продажи"].get())
-            sell_type = self.car_entries["Тип оплаты продажи"].get()
-            buyer_name = self.car_entries["ФИО покупателя"].get().strip()
-            on_commission = self.car_entries["На комиссии"].get()
-            expenses = float(self.car_entries["Доп. расходы"].get())
-            expenses_type = self.car_entries["Тип оплаты расходов"].get()
-            expenses_desc = self.car_entries["Описание расходов"].get().strip()
+            brand = self.car_entries["Марка"].get().strip()
+            year = self.car_entries["Год"].get().strip()
+            vin = self.car_entries["VIN"].get().strip()
+            price = float(self.car_entries["Цена"].get() or 0)
+            cost = float(self.car_entries["Стоимость"].get() or 0)
+            comment = self.car_entries["Комментарий"].get().strip()
 
-            if not model:
-                messagebox.showerror("Ошибка", "Введите модель авто!")
+            profit = price - cost  # Рассчитываем прибыль
+
+            if not brand:
+                messagebox.showerror("Ошибка", "Введите марку авто!")
                 return
 
-            profit = sell_price - buy_price - expenses
-
             car_deal = {
-                "model": model,
-                "buy_date": buy_date,
-                "buy_price": buy_price,
-                "buy_type": buy_type,
-                "seller_name": seller_name,
-                "sell_date": sell_date,
-                "sell_price": sell_price,
-                "sell_type": sell_type,
-                "buyer_name": buyer_name,
-                "on_commission": on_commission,
-                "expenses": expenses,
-                "expenses_type": expenses_type,
-                "expenses_desc": expenses_desc,
-                "profit": profit
+                "brand": brand,
+                "year": year,
+                "vin": vin,
+                "price": price,
+                "cost": cost,
+                "header": profit,
+                "comment": comment
             }
 
             self.db.add_car_deal(car_deal)
             self.car_deals = self.db.get_all_car_deals()
-
-            for entry in self.car_entries.values():
-                if isinstance(entry, ctk.CTkEntry):
-                    entry.delete(0, tk.END)
-                elif isinstance(entry, ctk.CTkComboBox):
-                    entry.set("Наличные")
-
             self.update_report()
             messagebox.showinfo("Успех", "Авто-сделка успешно добавлена!")
 
-        except ValueError:
-            messagebox.showerror("Ошибка", "Введите корректные числовые значения!")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка при добавлении: {str(e)}")
 
     def update_report(self):
         for item in self.tree.get_children():
@@ -645,24 +636,15 @@ class MoneyTrackerApp:
 
         for i, deal in enumerate(self.car_deals):
             self.car_tree.insert(
-                "",
-                "end",
-                iid=f"car_{i}",
+                "", "end", iid=f"car_{i}",
                 values=(
-                    deal["model"],
-                    deal["buy_date"],
-                    f"{deal['buy_price']:,.2f}",
-                    deal["buy_type"],
-                    deal.get("seller_name", ""),
-                    deal["sell_date"],
-                    f"{deal['sell_price']:,.2f}",
-                    deal["sell_type"],
-                    deal.get("buyer_name", ""),
-                    deal.get("on_commission", "Нет"),
-                    f"{deal['expenses']:,.2f}",
-                    deal["expenses_type"],
-                    f"{deal['profit']:,.2f}",
-                    deal["expenses_desc"]
+                    deal.get("brand", ""),
+                    deal.get("year", ""),
+                    deal.get("vin", ""),
+                    f"{deal.get('price', 0):,.2f}",
+                    deal.get("comment", ""),
+                    f"{deal.get('cost', 0):,.2f}",
+                    f"{deal.get('header', 0):,.2f}"
                 )
             )
 
@@ -673,7 +655,7 @@ class MoneyTrackerApp:
         total_expense = abs(sum(t["amount"] for t in self.transactions if t["type"] == "Расход"))
 
         additional_investment = max(0, total_expense - self.initial_capital)
-        car_profit = sum(deal["profit"] for deal in self.car_deals)
+        car_profit = sum(deal.get("header", 0) for deal in self.car_deals)
         total_profit = car_profit + total_income - additional_investment
 
         self.summary_labels["initial_capital"].configure(text=f"{self.initial_capital:,.2f} ₽")
@@ -688,26 +670,162 @@ class MoneyTrackerApp:
         if not path:
             return
         try:
-            if self.db.import_from_excel(path):
-                self.transactions = self.db.get_all_transactions()
-                self.car_deals = self.db.get_all_car_deals()
-                self.initial_capital = self.db.get_initial_capital()
-                self.capital_entry.delete(0, tk.END)
-                self.capital_entry.insert(0, str(self.initial_capital))
-                self.update_report()
-                messagebox.showinfo("Успех", "Данные успешно импортированы из Excel.")
+            with pd.ExcelFile(path) as xls:
+                # Импорт транзакций
+                if "Transactions" in xls.sheet_names:
+                    df = pd.read_excel(xls, sheet_name="Transactions")
+                    for _, row in df.iterrows():
+                        try:
+                            transaction = {
+                                "date": row.get("date", datetime.now().strftime("%d.%m.%Y %H:%M")),
+                                "type": row.get("type", "Приход"),
+                                "amount": float(row.get("amount", 0)),
+                                "description": str(row.get("description", "")),
+                                "category": row.get("category", "Наличные")
+                            }
+                            self.db.add_transaction(transaction)
+                        except Exception as e:
+                            print(f"Ошибка при импорте транзакции: {e}")
+
+                # Импорт авто-сделок
+                if "CarDeals" in xls.sheet_names:
+                    df = pd.read_excel(xls, sheet_name="CarDeals")
+                    for _, row in df.iterrows():
+                        try:
+                            # Проверяем обязательное поле brand
+                            brand = str(row.get("brand", "")).strip()
+                            if not brand:
+                                continue  # Пропускаем записи без марки авто
+
+                            car_deal = {
+                                "brand": brand,
+                                "model_year": str(row.get("model_year", row.get("year", ""))).strip(),
+                                "vin": str(row.get("vin", "")).strip(),
+                                "price": float(row.get("price", 0)),
+                                "cost": float(row.get("cost", 0)),
+                                "profit": float(row.get("profit", row.get("header", 0))),
+                                "comment": str(row.get("comment", ""))
+                            }
+                            self.db.add_car_deal(car_deal)
+                        except Exception as e:
+                            print(f"Ошибка при импорте авто-сделки: {e}")
+
+                # Импорт настроек
+                if "Config" in xls.sheet_names:
+                    df = pd.read_excel(xls, sheet_name="Config")
+                    if "initial_capital" in df.columns:
+                        try:
+                            self.db.update_initial_capital(float(df.iloc[0]["initial_capital"]))
+                        except:
+                            pass
+
+            # Обновляем данные из базы
+            self.transactions = self.db.get_all_transactions()
+            self.car_deals = self.db.get_all_car_deals()
+            self.initial_capital = self.db.get_initial_capital()
+
+            # Обновление поля капитала
+            self.capital_entry.delete(0, tk.END)
+            self.capital_entry.insert(0, str(self.initial_capital))
+
+            # Полностью обновляем отчёт
+            self.update_report()
+
+            messagebox.showinfo("Успех", "Данные успешно импортированы из Excel.")
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка при импорте: {e}")
 
     def export_to_excel(self):
-        path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel files", "*.xlsx")])
+        path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx")],
+            title="Сохранить отчет как"
+        )
         if not path:
             return
+
         try:
             if self.db.export_to_excel(path):
                 messagebox.showinfo("Успех", "Данные успешно экспортированы в Excel.")
+            else:
+                messagebox.showerror("Ошибка", "Не удалось экспортировать данные")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка при экспорте: {e}")
+            messagebox.showerror("Ошибка", f"Ошибка при экспорте: {str(e)}")
+
+    def setup_context_menus(self):
+        # Контекстное меню для таблицы транзакций
+        self.transaction_menu = tk.Menu(self.root, tearoff=0)
+        self.transaction_menu.add_command(label="Удалить", command=self.delete_selected_transaction)
+
+        # Контекстное меню для таблицы авто-сделок
+        self.car_menu = tk.Menu(self.root, tearoff=0)
+        self.car_menu.add_command(label="Удалить", command=self.delete_selected_car_deal)
+
+        # Привязка меню к таблицам
+        self.tree.bind("<Button-3>", self.show_transaction_menu)
+        self.car_tree.bind("<Button-3>", self.show_car_menu)
+
+    def show_transaction_menu(self, event):
+        item = self.tree.identify_row(event.y)
+        if item:
+            self.tree.selection_set(item)
+            self.transaction_menu.post(event.x_root, event.y_root)
+
+    def show_car_menu(self, event):
+        item = self.car_tree.identify_row(event.y)
+        if item:
+            self.car_tree.selection_set(item)
+            self.car_menu.post(event.x_root, event.y_root)
+
+    def delete_selected_transaction(self):
+        selected_item = self.tree.selection()
+        if not selected_item:
+            return
+
+        item = selected_item[0]
+        if not item.startswith("tr_"):
+            return
+
+        if not messagebox.askyesno("Подтверждение", "Вы уверены, что хотите удалить эту транзакцию?"):
+            return
+
+        index = int(item.split("_")[1])
+        transaction_id = self.transactions[index]["id"]
+
+        # Удаляем из базы данных
+        cursor = self.db.conn.cursor()
+        cursor.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
+        self.db.conn.commit()
+
+        # Удаляем из списка и обновляем таблицу
+        del self.transactions[index]
+        self.update_report()
+        messagebox.showinfo("Успех", "Транзакция успешно удалена")
+
+    def delete_selected_car_deal(self):
+        selected_item = self.car_tree.selection()
+        if not selected_item:
+            return
+
+        item = selected_item[0]
+        if not item.startswith("car_"):
+            return
+
+        if not messagebox.askyesno("Подтверждение", "Вы уверены, что хотите удалить эту авто-сделку?"):
+            return
+
+        index = int(item.split("_")[1])
+        deal_id = self.car_deals[index]["id"]
+
+        # Удаляем из базы данных
+        cursor = self.db.conn.cursor()
+        cursor.execute("DELETE FROM car_deals WHERE id = ?", (deal_id,))
+        self.db.conn.commit()
+
+        # Удаляем из списка и обновляем таблицу
+        del self.car_deals[index]
+        self.update_report()
+        messagebox.showinfo("Успех", "Авто-сделка успешно удалена")
 
 
 if __name__ == "__main__":
