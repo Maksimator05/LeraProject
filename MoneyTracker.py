@@ -414,7 +414,7 @@ class MoneyTrackerApp:
         self.update_report()
 
         key_order = ["date", "type", "amount", "description", "category"]
-        car_key_order = ["brand", "year", "vin", "cost", "price", "header"]
+        car_key_order = ["brand", "year", "vin", "price", "comment", "cost", "header"]
 
         self.tree.bind(
             "<Double-1>",
@@ -503,19 +503,33 @@ class MoneyTrackerApp:
 
             # Авто-сделка
             elif iid.startswith("car_"):
-                if key in ["price", "cost"]:
-                    # Пересчитываем прибыль при изменении цены или стоимости
-                    price = float(data_list[index].get("price", 0))
+                updates = {}
+                if key == "price":
+                    # При изменении цены пересчитываем прибыль
+                    price = float(cleaned)
                     cost = float(data_list[index].get("cost", 0))
                     header = price - cost
-                    data_list[index]["header"] = header
-
-                    self.db.update_car_deal(data_list[index]["id"], {
-                        **data_list[index],
+                    updates = {
+                        "price": price,
                         "header": header
-                    })
+                    }
+                elif key == "cost":
+                    # При изменении стоимости пересчитываем прибыль
+                    cost = float(cleaned)
+                    price = float(data_list[index].get("price", 0))
+                    header = price - cost
+                    updates = {
+                        "cost": cost,
+                        "header": header
+                    }
                 else:
-                    self.db.update_car_deal(data_list[index]["id"], {key: cleaned})
+                    updates = {key: cleaned}
+
+                # Обновляем данные в списке
+                data_list[index].update(updates)
+
+                # Обновляем в базе данных
+                self.db.update_car_deal(data_list[index]["id"], updates)
 
                 # Обновляем таблицу
                 self.car_tree.delete(*self.car_tree.get_children())
@@ -526,8 +540,9 @@ class MoneyTrackerApp:
                             deal.get("brand", ""),
                             deal.get("year", ""),
                             deal.get("vin", ""),
+                            f"{deal.get('price', 0):,.2f}",
+                            deal.get("comment", ""),
                             f"{deal.get('cost', 0):,.2f}",
-                            "",
                             f"{deal.get('header', 0):,.2f}"
                         )
                     )
@@ -669,11 +684,21 @@ class MoneyTrackerApp:
         path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
         if not path:
             return
+
         try:
             with pd.ExcelFile(path) as xls:
-                # Импорт транзакций
-                if "Transactions" in xls.sheet_names:
-                    df = pd.read_excel(xls, sheet_name="Transactions")
+                # Получаем список всех листов в файле
+                sheet_names = xls.sheet_names
+
+                # Импорт транзакций (проверяем разные варианты названий)
+                transaction_sheet = None
+                for name in ['Транзакции', 'Transactions']:
+                    if name in sheet_names:
+                        transaction_sheet = name
+                        break
+
+                if transaction_sheet:
+                    df = pd.read_excel(xls, sheet_name=transaction_sheet)
                     for _, row in df.iterrows():
                         try:
                             transaction = {
@@ -687,35 +712,56 @@ class MoneyTrackerApp:
                         except Exception as e:
                             print(f"Ошибка при импорте транзакции: {e}")
 
-                # Импорт авто-сделок
-                if "CarDeals" in xls.sheet_names:
-                    df = pd.read_excel(xls, sheet_name="CarDeals")
+                # Импорт авто-сделок (проверяем разные варианты названий)
+                car_sheet = None
+                for name in ['Площадка', 'Авто-сделки', 'CarDeals']:
+                    if name in sheet_names:
+                        car_sheet = name
+                        break
+
+                if car_sheet:
+                    df = pd.read_excel(xls, sheet_name=car_sheet)
                     for _, row in df.iterrows():
                         try:
-                            # Проверяем обязательное поле brand
-                            brand = str(row.get("brand", "")).strip()
+                            # Проверяем обязательное поле brand (разные варианты названий)
+                            brand = str(row.get("brand", row.get("Марка", row.get("Модель", ""))).strip())
                             if not brand:
                                 continue  # Пропускаем записи без марки авто
 
+                            year = str(row.get("year", row.get("Год", ""))).strip()
+                            vin = str(row.get("vin", row.get("VIN", ""))).strip()
+                            price = float(row.get("price", row.get("Цена", 0)))
+                            cost = float(row.get("cost", row.get("Стоимость", 0)))
+                            profit = float(row.get("profit", row.get("Прибыль", row.get("header", price - cost))))
+                            comment = str(row.get("comment", row.get("Комментарий", "")))
+
                             car_deal = {
                                 "brand": brand,
-                                "model_year": str(row.get("model_year", row.get("year", ""))).strip(),
-                                "vin": str(row.get("vin", "")).strip(),
-                                "price": float(row.get("price", 0)),
-                                "cost": float(row.get("cost", 0)),
-                                "profit": float(row.get("profit", row.get("header", 0))),
-                                "comment": str(row.get("comment", ""))
+                                "year": year,
+                                "vin": vin,
+                                "price": price,
+                                "cost": cost,
+                                "header": profit,
+                                "comment": comment
                             }
                             self.db.add_car_deal(car_deal)
                         except Exception as e:
                             print(f"Ошибка при импорте авто-сделки: {e}")
 
-                # Импорт настроек
-                if "Config" in xls.sheet_names:
-                    df = pd.read_excel(xls, sheet_name="Config")
+                # Импорт настроек (проверяем разные варианты названий)
+                settings_sheet = None
+                for name in ['Настройки', 'Settings', 'Config']:
+                    if name in sheet_names:
+                        settings_sheet = name
+                        break
+
+                if settings_sheet:
+                    df = pd.read_excel(xls, sheet_name=settings_sheet)
                     if "initial_capital" in df.columns:
                         try:
-                            self.db.update_initial_capital(float(df.iloc[0]["initial_capital"]))
+                            capital = float(df.iloc[0]["initial_capital"])
+                            self.db.update_initial_capital(capital)
+                            self.initial_capital = capital
                         except:
                             pass
 
@@ -733,7 +779,7 @@ class MoneyTrackerApp:
 
             messagebox.showinfo("Успех", "Данные успешно импортированы из Excel.")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка при импорте: {e}")
+            messagebox.showerror("Ошибка", f"Ошибка при импорте: {str(e)}")
 
     def export_to_excel(self):
         path = filedialog.asksaveasfilename(
