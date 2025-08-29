@@ -124,6 +124,36 @@ class DatabaseManager:
         self.conn.commit()
         return cursor.rowcount > 0
 
+    def exists_transaction(self, transaction: Dict) -> bool:
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) FROM transactions
+            WHERE date = ? AND type = ? AND amount = ? AND description = ? AND category = ?
+        """, (
+            transaction["date"],
+            transaction["type"],
+            transaction["amount"],
+            transaction["description"],
+            transaction["category"]
+        ))
+        return cursor.fetchone()[0] > 0
+
+    def exists_car_deal(self, car_deal: Dict) -> bool:
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) FROM car_deals
+            WHERE brand = ? AND year = ? AND vin = ? AND price = ? AND cost = ? AND comment = ?
+        """, (
+            car_deal["brand"],
+            car_deal["year"],
+            car_deal["vin"],
+            car_deal["price"],
+            car_deal["cost"],
+            car_deal.get("comment", "")
+        ))
+        return cursor.fetchone()[0] > 0
+
+
     # ---------------- Настройки ----------------
     def get_initial_capital(self) -> float:
         cursor = self.conn.cursor()
@@ -319,8 +349,8 @@ class MoneyTrackerApp:
             ("Марка:", "entry", None, ""),
             ("Год:", "entry", None, ""),
             ("VIN:", "entry", None, ""),
-            ("Цена:", "entry", None, "0"),
-            ("Стоимость:", "entry", None, "0"),
+            ("Цена продажи с учетом опций:", "entry", None, "0"),
+            ("Закупочная стоимость:", "entry", None, "0"),
             ("Комментарий:", "entry", None, "")
         ]
 
@@ -368,9 +398,9 @@ class MoneyTrackerApp:
             "#1": {"name": "brand", "text": "Марка", "width": 120, "anchor": "center"},
             "#2": {"name": "model_year", "text": "Год", "width": 80, "anchor": "center"},
             "#3": {"name": "vin", "text": "VIN", "width": 150, "anchor": "center"},
-            "#4": {"name": "price", "text": "Цена", "width": 120, "anchor": "e"},
+            "#4": {"name": "price", "text": "Цена продажи с учетом опций", "width": 120, "anchor": "e"},
             "#5": {"name": "comment", "text": "Комментарий", "width": 200},
-            "#6": {"name": "cost", "text": "Стоимость", "width": 120, "anchor": "e"},
+            "#6": {"name": "cost", "text": "Закупочная стоимость", "width": 120, "anchor": "e"},
             "#7": {"name": "profit", "text": "Прибыль", "width": 120, "anchor": "e"}
         }
 
@@ -708,7 +738,9 @@ class MoneyTrackerApp:
                                 "description": str(row.get("description", "")),
                                 "category": row.get("category", "Наличные")
                             }
-                            self.db.add_transaction(transaction)
+                            if not self.db.exists_transaction(transaction):
+                                self.db.add_transaction(transaction)
+
                         except Exception as e:
                             print(f"Ошибка при импорте транзакции: {e}")
 
@@ -744,7 +776,9 @@ class MoneyTrackerApp:
                                 "header": profit,
                                 "comment": comment
                             }
-                            self.db.add_car_deal(car_deal)
+                            if not self.db.exists_car_deal(car_deal):
+                                self.db.add_car_deal(car_deal)
+
                         except Exception as e:
                             print(f"Ошибка при импорте авто-сделки: {e}")
 

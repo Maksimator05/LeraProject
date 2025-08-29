@@ -1,171 +1,155 @@
 import os
+import tempfile
 import pytest
-from MoneyTracker import DatabaseManager  # Импортируем твой класс
-
+import pandas as pd
+from datetime import datetime
+from MoneyTracker import DatabaseManager  # <-- замени на свой путь
 
 @pytest.fixture
 def db():
-    test_db_name = "test_money_tracker.db"
-    if os.path.exists(test_db_name):
-        os.remove(test_db_name)
-    db = DatabaseManager(test_db_name)
+    db = DatabaseManager(":memory:")  # временная БД в памяти
     yield db
-    db.close()  # Закрываем соединение
-    if os.path.exists(test_db_name):
-        os.remove(test_db_name)
+    db.close()
 
-
+# ---------- Тесты транзакций ----------
 def test_add_and_get_transaction(db):
-    """Проверка добавления и получения транзакции"""
-    data = {
-        "date": "2025-08-13",
-        "type": "income",
-        "amount": 1000.50,
-        "description": "Test income",
-        "category": "Salary"
+    transaction = {
+        "date": datetime.now().strftime("%d.%m.%Y %H:%M"),
+        "type": "Приход",
+        "amount": 1000.0,
+        "description": "Зарплата",
+        "category": "Наличные"
     }
-    tid = db.add_transaction(data)
-    assert isinstance(tid, int)
+    tr_id = db.add_transaction(transaction)
+    assert isinstance(tr_id, int)
 
     transactions = db.get_all_transactions()
     assert len(transactions) == 1
-    assert transactions[0]["description"] == "Test income"
-
+    assert transactions[0]["description"] == "Зарплата"
 
 def test_update_transaction(db):
-    """Проверка обновления транзакции"""
-    tid = db.add_transaction({
-        "date": "2025-08-13",
-        "type": "expense",
-        "amount": 500,
-        "description": "Test expense",
-        "category": "Food"
+    tr_id = db.add_transaction({
+        "date": "2025-01-01",
+        "type": "Расход",
+        "amount": -500,
+        "description": "Еда",
+        "category": "Карта"
     })
-    updated = db.update_transaction(tid, {"amount": 750})
-    assert updated
+    updated = db.update_transaction(tr_id, {"amount": -600, "description": "Продукты"})
+    assert updated is True
+    tr = db.get_all_transactions()[0]
+    assert tr["amount"] == -600
+    assert tr["description"] == "Продукты"
 
-    transactions = db.get_all_transactions()
-    assert transactions[0]["amount"] == 750
-
-
+# ---------- Тесты авто-сделок ----------
 def test_add_and_get_car_deal(db):
-    """Проверка добавления и получения авто-сделки"""
-    data = {
-        "model": "Toyota Camry",
-        "buy_date": "2025-08-01",
-        "buy_price": 10000,
-        "buy_type": "cash",
-        "seller_name": "John Doe",
-        "sell_date": "2025-08-10",
-        "sell_price": 12000,
-        "sell_type": "transfer",
-        "buyer_name": "Jane Smith",
-        "on_commission": "No",
-        "expenses": 500,
-        "expenses_type": "repair",
-        "expenses_desc": "Engine repair",
-        "profit": 1500
+    deal = {
+        "brand": "BMW",
+        "year": "2020",
+        "vin": "123VIN",
+        "price": 20000,
+        "cost": 15000,
+        "header": 5000,
+        "comment": "Хорошее авто"
     }
-    did = db.add_car_deal(data)
-    assert isinstance(did, int)
+    deal_id = db.add_car_deal(deal)
+    assert isinstance(deal_id, int)
 
     deals = db.get_all_car_deals()
     assert len(deals) == 1
-    assert deals[0]["model"] == "Toyota Camry"
-
+    assert deals[0]["brand"] == "BMW"
+    assert deals[0]["header"] == 5000
 
 def test_update_car_deal(db):
-    """Проверка обновления авто-сделки"""
-    did = db.add_car_deal({
-        "model": "BMW X5",
-        "buy_date": "2025-08-01",
-        "buy_price": 15000,
-        "buy_type": "credit",
-        "seller_name": "AutoDealer",
-        "sell_date": "2025-08-11",
-        "sell_price": 18000,
-        "sell_type": "cash",
-        "buyer_name": "Buyer",
-        "on_commission": "Yes",
-        "expenses": 800,
-        "expenses_type": "service",
-        "expenses_desc": "Oil change",
-        "profit": 2200
+    deal_id = db.add_car_deal({
+        "brand": "Audi",
+        "year": "2019",
+        "vin": "VIN456",
+        "price": 15000,
+        "cost": 10000,
+        "header": 5000,
+        "comment": ""
     })
-    updated = db.update_car_deal(did, {"profit": 3000})
-    assert updated
+    updated = db.update_car_deal(deal_id, {"price": 18000, "header": 8000})
+    assert updated is True
+    deal = db.get_all_car_deals()[0]
+    assert deal["price"] == 18000
+    assert deal["header"] == 8000
 
-    deals = db.get_all_car_deals()
-    assert deals[0]["profit"] == 3000
-
-
+# ---------- Тесты настроек ----------
 def test_initial_capital(db):
-    """Проверка установки и получения стартового капитала"""
     assert db.get_initial_capital() == 0
     db.update_initial_capital(5000)
     assert db.get_initial_capital() == 5000
 
-
-def test_export_import_excel(db, tmp_path):
-    """Проверка экспорта и импорта в Excel"""
-
-    # --- Добавляем данные в основную БД ---
-    db.add_transaction({
-        "date": "2025-08-13",
-        "type": "income",
-        "amount": 1000,
-        "description": "Test export",
-        "category": "Work"
+# ---------- Тесты экспорта/импорта ----------
+def test_export_and_import_excel(db, tmp_path):
+    # добавим данные
+    transaction_id = db.add_transaction({
+        "date": "2025-01-01 12:00",
+        "type": "Приход",
+        "amount": 1000.0,
+        "description": "Тестовая транзакция",
+        "category": "Наличные"
     })
-    db.add_car_deal({
-        "model": "Audi A4",
-        "buy_date": "2025-08-01",
-        "buy_price": 20000,
-        "buy_type": "cash",
-        "seller_name": "Seller",
-        "sell_date": "2025-08-12",
-        "sell_price": 23000,
-        "sell_type": "cash",
-        "buyer_name": "Buyer",
-        "on_commission": "No",
-        "expenses": 1000,
-        "expenses_type": "repair",
-        "expenses_desc": "Paint",
-        "profit": 2000
-    })
-    db.update_initial_capital(7000)
 
-    # --- Экспорт в Excel ---
+    # Проверим, что транзакция добавилась
+    initial_transactions = db.get_all_transactions()
+    assert len(initial_transactions) == 1
+
+    # Используем СТАРЫЕ ключи, которые ожидает DatabaseManager
+    deal_id = db.add_car_deal({
+        "brand": "Tesla Model 3",
+        "year": "2021",
+        "vin": "TESLA123",
+        "price": 50000.0,
+        "cost": 40000.0,
+        "header": 10000.0,
+        "comment": "Электро"
+    })
+
+    # Проверим, что авто-сделка добавилась
+    initial_deals = db.get_all_car_deals()
+    assert len(initial_deals) == 1
+
+    db.update_initial_capital(777.0)
+    assert db.get_initial_capital() == 777.0
+
+    # экспорт
     export_file = tmp_path / "export.xlsx"
-    assert db.export_to_excel(export_file)
+    success = db.export_to_excel(str(export_file))
+    assert success is True
+    assert export_file.exists()
 
-    # --- Создаём новую пустую БД для импорта ---
-    import_db_path = tmp_path / "import_test.db"
-    new_db = DatabaseManager(import_db_path)
+    # создаем новую бд и импортируем
+    db2 = DatabaseManager(":memory:")
 
-    # Проверяем, что новая база изначально пустая
-    assert len(new_db.get_all_transactions()) == 0
-    assert len(new_db.get_all_car_deals()) == 0
+    # Проверим, что новая БД пустая
+    assert len(db2.get_all_transactions()) == 0
+    assert len(db2.get_all_car_deals()) == 0
+    assert db2.get_initial_capital() == 0.0
 
-    # --- Импорт из Excel ---
-    assert new_db.import_from_excel(export_file)
+    imported = db2.import_from_excel(str(export_file))
+    assert imported is True
 
-    # Проверяем, что импорт добавил ровно одну транзакцию и одну сделку
-    transactions = new_db.get_all_transactions()
-    car_deals = new_db.get_all_car_deals()
+    # проверяем, что данные перенеслись
+    trs = db2.get_all_transactions()
+    deals = db2.get_all_car_deals()
+    capital = db2.get_initial_capital()
 
-    assert len(transactions) == 1
-    assert len(car_deals) == 1
+    print(f"Импортированные транзакции: {trs}")
+    print(f"Импортированные сделки: {deals}")
+    print(f"Импортированный капитал: {capital}")
 
-    # Проверка содержимого транзакции
-    transaction = transactions[0]
-    assert transaction["amount"] == 1000
-    assert transaction["category"] == "Work"
-    assert transaction["description"] == "Test export"
+    assert len(trs) == 1
+    assert trs[0]['description'] == "Тестовая транзакция"
 
-    # Проверка содержимого сделки
-    deal = car_deals[0]
-    assert deal["model"] == "Audi A4"
-    assert deal["profit"] == 2000
+    assert len(deals) == 1
+    assert deals[0]['brand'] == "Tesla Model 3"  # Используем старый ключ 'brand'
 
+    assert capital == 777.0
 
+# ---------- Тест закрытия ----------
+def test_close_connection(db):
+    db.close()
+    assert db.conn is None
