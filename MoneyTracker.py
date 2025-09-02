@@ -42,6 +42,7 @@ class DatabaseManager:
                 comment TEXT,
                 price REAL DEFAULT 0,
                 cost REAL DEFAULT 0,
+                expenses REAL DEFAULT 0,
                 header REAL DEFAULT 0
             )
         """)
@@ -95,8 +96,8 @@ class DatabaseManager:
         cursor = self.conn.cursor()
         cursor.execute("""
             INSERT INTO car_deals (
-                brand, year, vin, comment, price, cost, header
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                brand, year, vin, comment, price, cost, expenses, header
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             car_deal["brand"],
             car_deal["year"],
@@ -104,6 +105,7 @@ class DatabaseManager:
             car_deal.get("comment", ""),
             car_deal.get("price", 0),
             car_deal.get("cost", 0),
+            car_deal.get("expenses", 0),  # 👈 теперь расходы сохраняются
             car_deal.get("header", 0)
         ))
         self.conn.commit()
@@ -239,7 +241,6 @@ class DatabaseManager:
             self.conn.close()
             self.conn = None
 
-
 class MoneyTrackerApp:
     def __init__(self, root):
         self.root = root
@@ -351,6 +352,7 @@ class MoneyTrackerApp:
             ("VIN:", "entry", None, ""),
             ("Цена продажи с учетом опций:", "entry", None, "0"),
             ("Закупочная стоимость:", "entry", None, "0"),
+            ("Расходы:", "entry", None, "0"),
             ("Комментарий:", "entry", None, "")
         ]
 
@@ -385,7 +387,7 @@ class MoneyTrackerApp:
             "#1": {"name": "date", "text": "Дата", "width": 180, "anchor": "center"},
             "#2": {"name": "type", "text": "Тип", "width": 120, "anchor": "center"},
             "#3": {"name": "amount", "text": "Сумма", "width": 150, "anchor": "e"},
-            "#4": {"name": "description", "text": "Описание", "width": 300},
+            "#4": {"name": "description", "text": "Описание", "width": 300, "anchor": "center"},
             "#5": {"name": "category", "text": "Категория", "width": 150, "anchor": "center"}
         }
 
@@ -398,16 +400,17 @@ class MoneyTrackerApp:
             "#1": {"name": "brand", "text": "Марка", "width": 120, "anchor": "center"},
             "#2": {"name": "model_year", "text": "Год", "width": 80, "anchor": "center"},
             "#3": {"name": "vin", "text": "VIN", "width": 150, "anchor": "center"},
-            "#4": {"name": "price", "text": "Цена продажи с учетом опций", "width": 120, "anchor": "e"},
-            "#5": {"name": "comment", "text": "Комментарий", "width": 200},
-            "#6": {"name": "cost", "text": "Закупочная стоимость", "width": 120, "anchor": "e"},
-            "#7": {"name": "profit", "text": "Прибыль", "width": 120, "anchor": "e"}
+            "#4": {"name": "price", "text": "Цена продажи", "width": 120, "anchor": "e"},
+            "#5": {"name": "cost", "text": "Закупочная стоимость", "width": 120, "anchor": "e"},
+            "#6": {"name": "expenses", "text": "Расходы", "width": 120, "anchor": "e"},  # Добавлен столбец расходов
+            "#7": {"name": "profit", "text": "Прибыль", "width": 120, "anchor": "e"},
+            "#8": {"name": "comment", "text": "Комментарий", "width": 200, "anchor": "center"}
         }
 
         self.car_tree = ttk.Treeview(self.report_frame, columns=list(car_columns.keys()), show="headings")
         for col, params in car_columns.items():
             self.car_tree.heading(col, text=params["text"])
-            self.car_tree.column(col, width=params["width"], anchor=params.get("anchor", "w"))
+            self.car_tree.column(col, width=params["width"], anchor=params.get("anchor", "center"))
         scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
         car_scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
 
@@ -444,7 +447,8 @@ class MoneyTrackerApp:
         self.update_report()
 
         key_order = ["date", "type", "amount", "description", "category"]
-        car_key_order = ["brand", "year", "vin", "price", "comment", "cost", "header"]
+        car_key_order = ["brand", "year", "vin", "price", "cost", "expenses", "header", "comment"]
+
 
         self.tree.bind(
             "<Double-1>",
@@ -552,6 +556,16 @@ class MoneyTrackerApp:
                         "cost": cost,
                         "header": header
                     }
+                elif key == "expenses":
+                    expenses = float(cleaned)
+                    price = float(data_list[index].get("price", 0))
+                    cost = float(data_list[index].get("cost", 0))
+                    header = price - cost - expenses  # Правильный расчет прибыли с учетом расходов
+                    updates = {
+                        "expenses": expenses,
+                        "header": header
+                    }
+
                 else:
                     updates = {key: cleaned}
 
@@ -571,9 +585,10 @@ class MoneyTrackerApp:
                             deal.get("year", ""),
                             deal.get("vin", ""),
                             f"{deal.get('price', 0):,.2f}",
-                            deal.get("comment", ""),
                             f"{deal.get('cost', 0):,.2f}",
-                            f"{deal.get('header', 0):,.2f}"
+                            f"{deal.get('expenses', 0):,.2f}"  # Этой строки не было!
+                            f"{deal.get('header', 0):,.2f}",
+                            deal.get("comment", "")
                         )
                     )
 
@@ -633,9 +648,10 @@ class MoneyTrackerApp:
             vin = self.car_entries["VIN"].get().strip()
             price = float(self.car_entries["Цена продажи с учетом опций"].get() or 0)
             cost = float(self.car_entries["Закупочная стоимость"].get() or 0)
+            expenses = float(self.car_entries["Расходы"].get() or 0)  # Получаем расходы
             comment = self.car_entries["Комментарий"].get().strip()
 
-            profit = price - cost  # Рассчитываем прибыль
+            profit = price - cost - expenses
 
             if not brand:
                 messagebox.showerror("Ошибка", "Введите марку авто!")
@@ -647,6 +663,7 @@ class MoneyTrackerApp:
                 "vin": vin,
                 "price": price,
                 "cost": cost,
+                "expenses": expenses,  # Сохраняем расходы
                 "header": profit,
                 "comment": comment
             }
@@ -687,9 +704,10 @@ class MoneyTrackerApp:
                     deal.get("year", ""),
                     deal.get("vin", ""),
                     f"{deal.get('price', 0):,.2f}",
-                    deal.get("comment", ""),
                     f"{deal.get('cost', 0):,.2f}",
-                    f"{deal.get('header', 0):,.2f}"
+                    f"{deal.get('expenses', 0):,.2f}",  # Исправлено: добавлены расходы
+                    f"{deal.get('header', 0):,.2f}",
+                    deal.get("comment", "")
                 )
             )
 
