@@ -631,8 +631,8 @@ class MoneyTrackerApp:
             brand = self.car_entries["Марка"].get().strip()
             year = self.car_entries["Год"].get().strip()
             vin = self.car_entries["VIN"].get().strip()
-            price = float(self.car_entries["Цена"].get() or 0)
-            cost = float(self.car_entries["Стоимость"].get() or 0)
+            price = float(self.car_entries["Цена продажи с учетом опций"].get() or 0)
+            cost = float(self.car_entries["Закупочная стоимость"].get() or 0)
             comment = self.car_entries["Комментарий"].get().strip()
 
             profit = price - cost  # Рассчитываем прибыль
