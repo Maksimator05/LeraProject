@@ -2,6 +2,9 @@ import tkinter as tk
 import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from calendar import monthrange
 
 # Настройка тем - принудительно темная
 ctk.set_appearance_mode("Dark")
@@ -42,6 +45,7 @@ class DatabaseManager:
                 comment TEXT,
                 price REAL DEFAULT 0,
                 cost REAL DEFAULT 0,
+                expenses REAL DEFAULT 0,
                 header REAL DEFAULT 0
             )
         """)
@@ -95,8 +99,8 @@ class DatabaseManager:
         cursor = self.conn.cursor()
         cursor.execute("""
             INSERT INTO car_deals (
-                brand, year, vin, comment, price, cost, header
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                brand, year, vin, comment, price, cost, expenses, header
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             car_deal["brand"],
             car_deal["year"],
@@ -104,6 +108,7 @@ class DatabaseManager:
             car_deal.get("comment", ""),
             car_deal.get("price", 0),
             car_deal.get("cost", 0),
+            car_deal.get("expenses", 0),  # 👈 теперь расходы сохраняются
             car_deal.get("header", 0)
         ))
         self.conn.commit()
@@ -239,11 +244,10 @@ class DatabaseManager:
             self.conn.close()
             self.conn = None
 
-
 class MoneyTrackerApp:
     def __init__(self, root):
         self.root = root
-        self.root.title("💰 Авто-Трекер Финансов v2.4")
+        self.root.title("💰 Авто-Трекер Финансов v2.5")
         self.root.geometry("1300x900")
 
         self.large_font = ("Arial", 14)
@@ -298,6 +302,10 @@ class MoneyTrackerApp:
         self.notebook.add(self.report_frame, text="📊 Финансовый отчет")
         self.setup_report_frame()
 
+        self.monthly_frame = ctk.CTkFrame(self.notebook)
+        self.notebook.add(self.monthly_frame, text="📅 Расходы за месяц")
+        self.setup_monthly_frame()
+
         self.settings_frame = ctk.CTkFrame(self.notebook)
         self.notebook.add(self.settings_frame, text="⚙️ Настройки")
         self.setup_settings_frame()
@@ -351,6 +359,7 @@ class MoneyTrackerApp:
             ("VIN:", "entry", None, ""),
             ("Цена продажи с учетом опций:", "entry", None, "0"),
             ("Закупочная стоимость:", "entry", None, "0"),
+            ("Расходы:", "entry", None, "0"),
             ("Комментарий:", "entry", None, "")
         ]
 
@@ -373,6 +382,308 @@ class MoneyTrackerApp:
             height=40
         ).grid(row=len(car_fields) + 1, column=0, columnspan=2, pady=20, sticky="we")
 
+    def setup_monthly_frame(self):
+        self.monthly_frame.grid_columnconfigure(0, weight=1)
+        self.monthly_frame.grid_rowconfigure(2, weight=1)
+
+        # Заголовок
+        ctk.CTkLabel(self.monthly_frame, text="Анализ расходов по месяцам",
+                     font=self.xxlarge_font).grid(row=0, column=0, pady=(10, 20))
+
+        # Фрейм для выбора года и месяца
+        control_frame = ctk.CTkFrame(self.monthly_frame, fg_color="#363636", height=60)
+        control_frame.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 10))
+        control_frame.grid_columnconfigure(0, weight=1)
+        control_frame.grid_propagate(False)
+
+        # Внутренний фрейм для элементов управления
+        inner_frame = ctk.CTkFrame(control_frame, fg_color="transparent")
+        inner_frame.grid(row=0, column=0, sticky="w", padx=20, pady=10)
+
+        # Выбор года
+        ctk.CTkLabel(inner_frame, text="Год:", font=self.xlarge_font).grid(
+            row=0, column=0, padx=(0, 10), pady=5, sticky="w")
+
+        current_year = datetime.now().year
+        years = [str(year) for year in range(current_year - 2, current_year + 1)]
+        self.year_combo = ctk.CTkComboBox(inner_frame, values=years, width=100, height=40,
+                                          dropdown_font=self.large_font, font=self.xlarge_font)
+        self.year_combo.set(str(current_year))
+        self.year_combo.grid(row=0, column=1, padx=(0, 30), pady=5, sticky="w")
+        self.year_combo.configure(command=lambda event: self.update_monthly_report())
+
+        # Выбор месяца
+        ctk.CTkLabel(inner_frame, text="Месяц:", font=self.xlarge_font).grid(
+            row=0, column=2, padx=(0, 10), pady=5, sticky="w")
+
+        months = [
+            "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь",
+            "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
+        ]
+        current_month = datetime.now().month - 1
+        self.month_combo = ctk.CTkComboBox(inner_frame, values=months, width=150, height=40,
+                                           dropdown_font=self.large_font, font=self.xlarge_font)
+        self.month_combo.set(months[current_month])
+        self.month_combo.grid(row=0, column=3, padx=(0, 20), pady=5, sticky="w")
+        self.month_combo.configure(command=lambda event: self.update_monthly_report())
+
+        # Таблица с ежедневной сводкой
+        daily_columns = {
+            "#1": {"name": "date", "text": "Дата", "width": 100, "anchor": "center"},
+            "#2": {"name": "income", "text": "Приход", "width": 120, "anchor": "e"},
+            "#3": {"name": "expense", "text": "Расход", "width": 120, "anchor": "e"},
+            "#4": {"name": "balance", "text": "Итог в кассе", "width": 140, "anchor": "e"},
+            "#5": {"name": "transactions", "text": "Операций", "width": 80, "anchor": "center"}
+        }
+
+        self.daily_tree = ttk.Treeview(self.monthly_frame, columns=list(daily_columns.keys()), show="headings",
+                                       height=8)
+        for col, params in daily_columns.items():
+            self.daily_tree.heading(col, text=params["text"])
+            self.daily_tree.column(col, width=params["width"], anchor=params.get("anchor", "w"))
+
+        # Детальная таблица операций
+        detail_columns = {
+            "#1": {"name": "date", "text": "Дата", "width": 150, "anchor": "center"},
+            "#2": {"name": "type", "text": "Тип", "width": 80, "anchor": "center"},
+            "#3": {"name": "description", "text": "Описание", "width": 250, "anchor": "w"},
+            "#4": {"name": "category", "text": "Категория", "width": 120, "anchor": "center"},
+            "#5": {"name": "amount", "text": "Сумма", "width": 120, "anchor": "e"}
+        }
+
+        self.detail_tree = ttk.Treeview(self.monthly_frame, columns=list(detail_columns.keys()), show="headings",
+                                        height=12)
+        for col, params in detail_columns.items():
+            self.detail_tree.heading(col, text=params["text"])
+            self.detail_tree.column(col, width=params["width"], anchor=params.get("anchor", "w"))
+
+        # Полосы прокрутки
+        scrollbar_y1 = ttk.Scrollbar(self.monthly_frame, orient="vertical")
+        scrollbar_y2 = ttk.Scrollbar(self.monthly_frame, orient="vertical")
+
+        self.daily_tree.configure(yscrollcommand=scrollbar_y1.set)
+        self.detail_tree.configure(yscrollcommand=scrollbar_y2.set)
+        scrollbar_y1.configure(command=self.daily_tree.yview)
+        scrollbar_y2.configure(command=self.detail_tree.yview)
+
+        # Размещение элементов
+        self.daily_tree.grid(row=2, column=0, sticky="nsew", padx=(10, 0), pady=(0, 5))
+        scrollbar_y1.grid(row=2, column=1, sticky="ns", pady=(0, 5))
+
+        # Заголовок детальной таблицы
+        ctk.CTkLabel(self.monthly_frame, text="Детализация операций по дням:",
+                     font=self.xlarge_font).grid(row=3, column=0, sticky="w", padx=10, pady=(10, 5))
+
+        self.detail_tree.grid(row=4, column=0, sticky="nsew", padx=(10, 0), pady=(0, 10))
+        scrollbar_y2.grid(row=4, column=1, sticky="ns", pady=(0, 10))
+
+        # Панель статистики месяца
+        stats_frame = ctk.CTkFrame(self.monthly_frame)
+        stats_frame.grid(row=5, column=0, columnspan=2, sticky="we", padx=10, pady=10)
+
+        self.stats_labels = {
+            "total_income": ctk.CTkLabel(stats_frame, text="Общий приход: 0.00 ₽", font=self.xlarge_font),
+            "total_expense": ctk.CTkLabel(stats_frame, text="Общий расход: 0.00 ₽", font=self.xlarge_font),
+            "month_balance": ctk.CTkLabel(stats_frame, text="Итог за месяц: 0.00 ₽", font=self.xxlarge_font),
+            "days_count": ctk.CTkLabel(stats_frame, text="Дней с операциями: 0", font=self.large_font)
+        }
+
+        for i, (key, label) in enumerate(self.stats_labels.items()):
+            label.grid(row=0, column=i, padx=15, pady=5)
+
+        # Настройка весов для растягивания
+        self.monthly_frame.grid_rowconfigure(2, weight=1)
+        self.monthly_frame.grid_rowconfigure(4, weight=2)
+
+        # Привязка события выбора дня
+        self.daily_tree.bind("<<TreeviewSelect>>", self.on_day_selected)
+
+        # Первоначальное обновление отчета
+        self.update_monthly_report()
+
+    def update_monthly_report(self, event=None):
+        """Обновляет отчет о расходах за месяц"""
+        # Очищаем таблицы
+        for item in self.daily_tree.get_children():
+            self.daily_tree.delete(item)
+        for item in self.detail_tree.get_children():
+            self.detail_tree.delete(item)
+
+        # Получаем выбранные год и месяц
+        try:
+            selected_year = int(self.year_combo.get())
+            selected_month = self.month_combo.get()
+            month_number = self.get_month_number(selected_month)
+        except (ValueError, AttributeError):
+            return
+
+        # Группируем операции по дням
+        daily_data = {}
+        total_income = 0
+        total_expense = 0
+
+        for transaction in self.transactions:
+            try:
+                # Парсим дату
+                date_str = transaction["date"].split()[0]
+                day, month, year = map(int, date_str.split('.'))
+
+                if year == selected_year and month == month_number:
+                    if date_str not in daily_data:
+                        daily_data[date_str] = {
+                            'income': 0,
+                            'expense': 0,
+                            'transactions': []
+                        }
+
+                    amount = abs(transaction["amount"])
+                    if transaction["type"] == "Приход":
+                        daily_data[date_str]['income'] += amount
+                        total_income += amount
+                    else:
+                        daily_data[date_str]['expense'] += amount
+                        total_expense += amount
+
+                    daily_data[date_str]['transactions'].append(transaction)
+
+            except (ValueError, IndexError):
+                continue
+
+        # Заполняем таблицу ежедневной сводки
+        for date_str in sorted(daily_data.keys(), reverse=True):
+            data = daily_data[date_str]
+            balance = data['income'] - data['expense']
+            transactions_count = len(data['transactions'])
+
+            self.daily_tree.insert(
+                "",
+                "end",
+                values=(
+                    date_str,
+                    f"{data['income']:,.2f}",
+                    f"{data['expense']:,.2f}",
+                    f"{balance:,.2f}",
+                    transactions_count
+                )
+            )
+
+        # Обновляем статистику месяца
+        month_balance = total_income - total_expense
+        days_with_operations = len(daily_data)
+
+        self.stats_labels["total_income"].configure(text=f"Общий приход: {total_income:,.2f} ₽")
+        self.stats_labels["total_expense"].configure(text=f"Общий расход: {total_expense:,.2f} ₽")
+        self.stats_labels["month_balance"].configure(text=f"Итог за месяц: {month_balance:,.2f} ₽")
+        self.stats_labels["days_count"].configure(text=f"Дней с операциями: {days_with_operations}")
+
+    def on_day_selected(self, event):
+        """Обработчик выбора дня в таблице"""
+        selected_items = self.daily_tree.selection()
+        if not selected_items:
+            return
+
+        selected_item = selected_items[0]
+        date_str = self.daily_tree.item(selected_item, "values")[0]
+
+        # Очищаем детальную таблицу
+        for item in self.detail_tree.get_children():
+            self.detail_tree.delete(item)
+
+        # Получаем выбранные год и месяц
+        try:
+            selected_year = int(self.year_combo.get())
+            selected_month = self.month_combo.get()
+            month_number = self.get_month_number(selected_month)
+        except (ValueError, AttributeError):
+            return
+
+        # Заполняем детальную таблицу операциями за выбранный день
+        for transaction in self.transactions:
+            try:
+                transaction_date = transaction["date"].split()[0]
+                day, month, year = map(int, transaction_date.split('.'))
+
+                if (year == selected_year and month == month_number and
+                        transaction_date == date_str):
+                    self.detail_tree.insert(
+                        "",
+                        "end",
+                        values=(
+                            transaction["date"],
+                            transaction["type"],
+                            transaction["description"],
+                            transaction["category"],
+                            f"{abs(transaction['amount']):,.2f} ₽"
+                        )
+                    )
+
+            except (ValueError, IndexError):
+                continue
+
+    # Добавляем метод для обновления данных при изменении транзакций
+    def refresh_data(self):
+        """Обновляет все данные из базы и перерисовывает отчеты"""
+        # Загружаем свежие данные из базы
+        self.transactions = self.db.get_all_transactions()
+        self.car_deals = self.db.get_all_car_deals()
+        self.initial_capital = self.db.get_initial_capital()
+
+        # Обновляем все отчеты
+        self.update_report()
+        self.update_monthly_report()
+
+    def get_month_number(self, month_name):
+        months = {
+            "Январь": 1, "Февраль": 2, "Март": 3, "Апрель": 4,
+            "Май": 5, "Июнь": 6, "Июль": 7, "Август": 8,
+            "Сентябрь": 9, "Октябрь": 10, "Ноябрь": 11, "Декабрь": 12
+        }
+        return months.get(month_name, datetime.now().month)
+
+    def parse_date(self, date_str):
+        try:
+            # Парсим дату из формата "dd.mm.yyyy HH:MM"
+            date_part = date_str.split()[0]
+            return datetime.strptime(date_part, "%d.%m.%Y")
+        except:
+            return datetime.now()
+
+    def update_monthly_chart(self, expenses, year, month):
+        """Обновляет график расходов по дням месяца"""
+        self.ax.clear()
+
+        # Группируем расходы по дням
+        daily_totals = {}
+        for expense in expenses:
+            try:
+                date_str = expense["date"].split()[0]
+                day = int(date_str.split('.')[0])
+                amount = abs(expense["amount"])
+
+                if day not in daily_totals:
+                    daily_totals[day] = 0
+                daily_totals[day] += amount
+            except (ValueError, IndexError):
+                continue
+
+        # Создаем данные для графика
+        days = list(range(1, monthrange(year, month)[1] + 1))
+        amounts = [daily_totals.get(day, 0) for day in days]
+
+        # Строим график
+        self.ax.bar(days, amounts, alpha=0.7, color='red')
+        self.ax.set_xlabel('День месяца', fontsize=12)
+        self.ax.set_ylabel('Сумма расходов (₽)', fontsize=12)
+        self.ax.set_title(f'Расходы за {self.month_combo.get()} {year}', fontsize=14)
+        self.ax.grid(True, alpha=0.3)
+
+        # Форматирование осей
+        self.ax.set_xlim(0.5, len(days) + 0.5)
+        self.ax.set_xticks(days[::2])  # Каждый второй день
+
+        self.fig.tight_layout()
+        self.canvas.draw()
+
     def setup_report_frame(self):
         self.report_frame.grid_columnconfigure(0, weight=1)
         self.report_frame.grid_rowconfigure(1, weight=1)
@@ -385,7 +696,7 @@ class MoneyTrackerApp:
             "#1": {"name": "date", "text": "Дата", "width": 180, "anchor": "center"},
             "#2": {"name": "type", "text": "Тип", "width": 120, "anchor": "center"},
             "#3": {"name": "amount", "text": "Сумма", "width": 150, "anchor": "e"},
-            "#4": {"name": "description", "text": "Описание", "width": 300},
+            "#4": {"name": "description", "text": "Описание", "width": 300, "anchor": "center"},
             "#5": {"name": "category", "text": "Категория", "width": 150, "anchor": "center"}
         }
 
@@ -398,16 +709,17 @@ class MoneyTrackerApp:
             "#1": {"name": "brand", "text": "Марка", "width": 120, "anchor": "center"},
             "#2": {"name": "model_year", "text": "Год", "width": 80, "anchor": "center"},
             "#3": {"name": "vin", "text": "VIN", "width": 150, "anchor": "center"},
-            "#4": {"name": "price", "text": "Цена продажи с учетом опций", "width": 120, "anchor": "e"},
-            "#5": {"name": "comment", "text": "Комментарий", "width": 200},
-            "#6": {"name": "cost", "text": "Закупочная стоимость", "width": 120, "anchor": "e"},
-            "#7": {"name": "profit", "text": "Прибыль", "width": 120, "anchor": "e"}
+            "#4": {"name": "price", "text": "Цена продажи", "width": 120, "anchor": "e"},
+            "#5": {"name": "cost", "text": "Закупочная стоимость", "width": 120, "anchor": "e"},
+            "#6": {"name": "expenses", "text": "Расходы", "width": 120, "anchor": "e"},  # Добавлен столбец расходов
+            "#7": {"name": "profit", "text": "Прибыль", "width": 120, "anchor": "e"},
+            "#8": {"name": "comment", "text": "Комментарий", "width": 200, "anchor": "center"}
         }
 
         self.car_tree = ttk.Treeview(self.report_frame, columns=list(car_columns.keys()), show="headings")
         for col, params in car_columns.items():
             self.car_tree.heading(col, text=params["text"])
-            self.car_tree.column(col, width=params["width"], anchor=params.get("anchor", "w"))
+            self.car_tree.column(col, width=params["width"], anchor=params.get("anchor", "center"))
         scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
         car_scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
 
@@ -444,7 +756,8 @@ class MoneyTrackerApp:
         self.update_report()
 
         key_order = ["date", "type", "amount", "description", "category"]
-        car_key_order = ["brand", "year", "vin", "price", "comment", "cost", "header"]
+        car_key_order = ["brand", "year", "vin", "price", "cost", "expenses", "header", "comment"]
+
 
         self.tree.bind(
             "<Double-1>",
@@ -552,6 +865,16 @@ class MoneyTrackerApp:
                         "cost": cost,
                         "header": header
                     }
+                elif key == "expenses":
+                    expenses = float(cleaned)
+                    price = float(data_list[index].get("price", 0))
+                    cost = float(data_list[index].get("cost", 0))
+                    header = price - cost - expenses  # Правильный расчет прибыли с учетом расходов
+                    updates = {
+                        "expenses": expenses,
+                        "header": header
+                    }
+
                 else:
                     updates = {key: cleaned}
 
@@ -571,9 +894,10 @@ class MoneyTrackerApp:
                             deal.get("year", ""),
                             deal.get("vin", ""),
                             f"{deal.get('price', 0):,.2f}",
-                            deal.get("comment", ""),
                             f"{deal.get('cost', 0):,.2f}",
-                            f"{deal.get('header', 0):,.2f}"
+                            f"{deal.get('expenses', 0):,.2f}"  # Этой строки не было!
+                            f"{deal.get('header', 0):,.2f}",
+                            deal.get("comment", "")
                         )
                     )
 
@@ -614,13 +938,14 @@ class MoneyTrackerApp:
             }
 
             self.db.add_transaction(transaction)
-            self.transactions = self.db.get_all_transactions()
+
+            # Обновляем данные и все отчеты
+            self.refresh_data()
 
             self.entries["Сумма:"].delete(0, tk.END)
             self.entries["Сумма:"].insert(0, "0.00")
             self.entries["Описание:"].delete(0, tk.END)
 
-            self.update_report()
             messagebox.showinfo("Успех", "Операция успешно добавлена!")
 
         except ValueError:
@@ -633,9 +958,10 @@ class MoneyTrackerApp:
             vin = self.car_entries["VIN"].get().strip()
             price = float(self.car_entries["Цена продажи с учетом опций"].get() or 0)
             cost = float(self.car_entries["Закупочная стоимость"].get() or 0)
+            expenses = float(self.car_entries["Расходы"].get() or 0)
             comment = self.car_entries["Комментарий"].get().strip()
 
-            profit = price - cost  # Рассчитываем прибыль
+            profit = price - cost - expenses
 
             if not brand:
                 messagebox.showerror("Ошибка", "Введите марку авто!")
@@ -647,13 +973,16 @@ class MoneyTrackerApp:
                 "vin": vin,
                 "price": price,
                 "cost": cost,
+                "expenses": expenses,
                 "header": profit,
                 "comment": comment
             }
 
             self.db.add_car_deal(car_deal)
-            self.car_deals = self.db.get_all_car_deals()
-            self.update_report()
+
+            # Обновляем данные и все отчеты
+            self.refresh_data()
+
             messagebox.showinfo("Успех", "Авто-сделка успешно добавлена!")
 
         except Exception as e:
@@ -687,9 +1016,10 @@ class MoneyTrackerApp:
                     deal.get("year", ""),
                     deal.get("vin", ""),
                     f"{deal.get('price', 0):,.2f}",
-                    deal.get("comment", ""),
                     f"{deal.get('cost', 0):,.2f}",
-                    f"{deal.get('header', 0):,.2f}"
+                    f"{deal.get('expenses', 0):,.2f}",  # Исправлено: добавлены расходы
+                    f"{deal.get('header', 0):,.2f}",
+                    deal.get("comment", "")
                 )
             )
 
@@ -877,9 +1207,9 @@ class MoneyTrackerApp:
         cursor.execute("DELETE FROM transactions WHERE id = ?", (transaction_id,))
         self.db.conn.commit()
 
-        # Удаляем из списка и обновляем таблицу
-        del self.transactions[index]
-        self.update_report()
+        # Обновляем данные и все отчеты
+        self.refresh_data()
+
         messagebox.showinfo("Успех", "Транзакция успешно удалена")
 
     def delete_selected_car_deal(self):
@@ -902,11 +1232,10 @@ class MoneyTrackerApp:
         cursor.execute("DELETE FROM car_deals WHERE id = ?", (deal_id,))
         self.db.conn.commit()
 
-        # Удаляем из списка и обновляем таблицу
-        del self.car_deals[index]
-        self.update_report()
-        messagebox.showinfo("Успех", "Авто-сделка успешно удалена")
+        # Обновляем данные и все отчеты
+        self.refresh_data()
 
+        messagebox.showinfo("Успех", "Авто-сделка успешно удалена")
 
 if __name__ == "__main__":
     root = ctk.CTk()
