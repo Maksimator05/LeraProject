@@ -1,5 +1,5 @@
-Money Tracker - Лицензионное соглашение
+Money Tracker - License Agreement
 
-1. Программа предоставляется "как есть".
-2. Вы можете использовать программу бесплатно.
-3. Запрещается распространение программы с изменениями без согласия автора.
+1. The program is provided "as is".
+2. You can use the program for free.
+3. It is prohibited to distribute the program with changes without the consent of the author.
