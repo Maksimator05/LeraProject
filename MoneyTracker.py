@@ -569,8 +569,8 @@ class MoneyTrackerApp:
             self.car_frame,
             text="Добавить авто-сделку",
             command=self.add_car_deal,
-            fg_color="#2196F3",
-            hover_color="#0b7dda",
+            fg_color="#b674ec",
+            hover_color="#c78df7",
             height=40
         ).grid(row=len(car_fields) + 1, column=0, columnspan=2, pady=20, sticky="we")
 
