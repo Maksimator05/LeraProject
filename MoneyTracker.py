@@ -2,8 +2,6 @@ import tkinter as tk
 import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from calendar import monthrange
 
 # Настройка тем - принудительно темная
@@ -25,6 +23,9 @@ class DatabaseManager:
     def create_tables(self):
         cursor = self.conn.cursor()
 
+        # Удаляем старую таблицу и создаем новую с полем payment_type
+        cursor.execute("DROP TABLE IF EXISTS transactions")
+
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -32,7 +33,8 @@ class DatabaseManager:
                 type TEXT NOT NULL,
                 amount REAL NOT NULL,
                 description TEXT NOT NULL,
-                category TEXT NOT NULL
+                category TEXT NOT NULL,
+                payment_type TEXT NOT NULL DEFAULT 'Наличные'
             )
         """)
 
@@ -67,14 +69,15 @@ class DatabaseManager:
     def add_transaction(self, transaction: Dict) -> int:
         cursor = self.conn.cursor()
         cursor.execute("""
-            INSERT INTO transactions (date, type, amount, description, category)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO transactions (date, type, amount, description, category, payment_type)
+            VALUES (?, ?, ?, ?, ?, ?)
         """, (
             transaction["date"],
             transaction["type"],
             transaction["amount"],
             transaction["description"],
-            transaction["category"]
+            transaction["category"],
+            transaction.get("payment_type", "Наличные")
         ))
         self.conn.commit()
         return cursor.lastrowid
@@ -94,6 +97,22 @@ class DatabaseManager:
         self.conn.commit()
         return cursor.rowcount > 0
 
+    def exists_transaction(self, transaction: Dict) -> bool:
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT COUNT(*) FROM transactions
+            WHERE date = ? AND type = ? AND amount = ? AND description = ? 
+            AND category = ? AND payment_type = ?
+        """, (
+            transaction["date"],
+            transaction["type"],
+            transaction["amount"],
+            transaction["description"],
+            transaction["category"],
+            transaction.get("payment_type", "Наличные")
+        ))
+        return cursor.fetchone()[0] > 0
+
     # ---------------- Авто-сделки ----------------
     def add_car_deal(self, car_deal: Dict) -> int:
         cursor = self.conn.cursor()
@@ -108,7 +127,7 @@ class DatabaseManager:
             car_deal.get("comment", ""),
             car_deal.get("price", 0),
             car_deal.get("cost", 0),
-            car_deal.get("expenses", 0),  # 👈 теперь расходы сохраняются
+            car_deal.get("expenses", 0),
             car_deal.get("header", 0)
         ))
         self.conn.commit()
@@ -129,20 +148,6 @@ class DatabaseManager:
         self.conn.commit()
         return cursor.rowcount > 0
 
-    def exists_transaction(self, transaction: Dict) -> bool:
-        cursor = self.conn.cursor()
-        cursor.execute("""
-            SELECT COUNT(*) FROM transactions
-            WHERE date = ? AND type = ? AND amount = ? AND description = ? AND category = ?
-        """, (
-            transaction["date"],
-            transaction["type"],
-            transaction["amount"],
-            transaction["description"],
-            transaction["category"]
-        ))
-        return cursor.fetchone()[0] > 0
-
     def exists_car_deal(self, car_deal: Dict) -> bool:
         cursor = self.conn.cursor()
         cursor.execute("""
@@ -157,7 +162,6 @@ class DatabaseManager:
             car_deal.get("comment", "")
         ))
         return cursor.fetchone()[0] > 0
-
 
     # ---------------- Настройки ----------------
     def get_initial_capital(self) -> float:
@@ -179,24 +183,23 @@ class DatabaseManager:
                 # Экспорт транзакций
                 transactions = self.get_all_transactions()
                 if transactions:
+                    # В методе export_to_excel() в секции экспорта транзакций:
                     pd.DataFrame(transactions).to_excel(
                         writer,
                         sheet_name="Транзакции",
                         index=False,
-                        columns=["date", "type", "amount", "description", "category"]
+                        columns=["date", "type", "amount", "description", "category", "payment_type"]
+                        # Добавляем payment_type
                     )
 
                 # Экспорт авто-сделок
                 car_deals = self.get_all_car_deals()
                 if car_deals:
-                    # Создаем DataFrame с нужными колонками
                     df_car_deals = pd.DataFrame(car_deals)
-                    # Переименовываем колонки для удобства
                     df_car_deals = df_car_deals.rename(columns={
                         "year": "Год",
                         "header": "Прибыль"
                     })
-                    # Выбираем нужные колонки в правильном порядке
                     df_car_deals.to_excel(
                         writer,
                         sheet_name="Авто-сделки",
@@ -219,20 +222,62 @@ class DatabaseManager:
     def import_from_excel(self, file_path: str) -> bool:
         try:
             with pd.ExcelFile(file_path) as xls:
-                if "Transactions" in xls.sheet_names:
-                    df = pd.read_excel(xls, sheet_name="Transactions")
+                # Импорт транзакций
+                if "Транзакции" in xls.sheet_names:
+                    df = pd.read_excel(xls, sheet_name="Транзакции")
                     for _, row in df.iterrows():
-                        self.add_transaction(row.to_dict())
+                        try:
+                            transaction = {
+                                "date": row.get("date", datetime.now().strftime("%d.%m.%Y %H:%M")),
+                                "type": row.get("type", "Приход"),
+                                "amount": float(row.get("amount", 0)),
+                                "description": str(row.get("description", "")),
+                                "category": row.get("category", "Другое"),
+                                "payment_type": row.get("payment_type", "Наличные")
+                            }
+                            if not self.exists_transaction(transaction):
+                                self.add_transaction(transaction)
+                        except Exception as e:
+                            print(f"Ошибка при импорте транзакции: {e}")
 
-                if "CarDeals" in xls.sheet_names:
-                    df = pd.read_excel(xls, sheet_name="CarDeals")
+                # Импорт авто-сделок
+                if "Авто-сделки" in xls.sheet_names:
+                    df = pd.read_excel(xls, sheet_name="Авто-сделки")
                     for _, row in df.iterrows():
-                        self.add_car_deal(row.to_dict())
+                        try:
+                            brand = str(row.get("brand", row.get("Марка", ""))).strip()
+                            if not brand:
+                                continue
+                            year = str(row.get("Год", row.get("year", ""))).strip()
+                            vin = str(row.get("vin", row.get("VIN", ""))).strip()
+                            price = float(row.get("price", row.get("Цена", 0)))
+                            cost = float(row.get("cost", row.get("Стоимость", 0)))
+                            profit = float(row.get("Прибыль", row.get("profit", row.get("header", price - cost))))
+                            comment = str(row.get("comment", row.get("Комментарий", "")))
 
-                if "Config" in xls.sheet_names:
-                    df = pd.read_excel(xls, sheet_name="Config")
+                            car_deal = {
+                                "brand": brand,
+                                "year": year,
+                                "vin": vin,
+                                "price": price,
+                                "cost": cost,
+                                "header": profit,
+                                "comment": comment
+                            }
+                            if not self.exists_car_deal(car_deal):
+                                self.add_car_deal(car_deal)
+                        except Exception as e:
+                            print(f"Ошибка при импорте авто-сделки: {e}")
+
+                # Импорт настроек
+                if "Настройки" in xls.sheet_names:
+                    df = pd.read_excel(xls, sheet_name="Настройки")
                     if "initial_capital" in df.columns:
-                        self.update_initial_capital(float(df.iloc[0]["initial_capital"]))
+                        try:
+                            capital = float(df.iloc[0]["initial_capital"])
+                            self.update_initial_capital(capital)
+                        except:
+                            pass
             return True
         except Exception as e:
             print(f"Ошибка при импорте: {e}")
@@ -316,11 +361,24 @@ class MoneyTrackerApp:
         self.add_frame.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(self.add_frame, text="Новая операция", font=self.large_font).grid(row=0, column=0, columnspan=2,
                                                                                        pady=(0, 20))
+
+        # Тип операции
         fields = [
             ("Тип операции:", "combobox", ["Приход", "Расход"], "Приход"),
             ("Сумма:", "entry", None, "0.00"),
             ("Описание:", "entry", None, ""),
-            ("Категория:", "combobox", ["Наличные", "Безнал", "Другое"], "Наличные")
+            ("Тип оплаты:", "combobox", ["Наличные", "Безнал","Другое"], "Наличные"),
+            ("Категория:", "combobox", [
+                "КЦ",
+                "Реклама",
+                "Вед.рекламы",
+                "Комиссия брок",
+                "Дилерство",
+                "Аренда",
+                "ЗП окладники",
+                "ЗП проценты",
+                "Другое"
+            ], "Другое")
         ]
 
         self.entries = {}
@@ -360,7 +418,7 @@ class MoneyTrackerApp:
             ("Цена продажи с учетом опций:", "entry", None, "0"),
             ("Закупочная стоимость:", "entry", None, "0"),
             ("Расходы:", "entry", None, "0"),
-            ("Комментарий:", "entry", None, "")
+            ("Комментарий оплаты:", "entry", None, "")
         ]
 
         self.car_entries = {}
@@ -446,7 +504,7 @@ class MoneyTrackerApp:
         detail_columns = {
             "#1": {"name": "date", "text": "Дата", "width": 150, "anchor": "center"},
             "#2": {"name": "type", "text": "Тип", "width": 80, "anchor": "center"},
-            "#3": {"name": "description", "text": "Описание", "width": 250, "anchor": "w"},
+            "#3": {"name": "description", "text": "Описание", "width": 250, "anchor": "center"},
             "#4": {"name": "category", "text": "Категория", "width": 120, "anchor": "center"},
             "#5": {"name": "amount", "text": "Сумма", "width": 120, "anchor": "e"}
         }
@@ -517,11 +575,15 @@ class MoneyTrackerApp:
         except (ValueError, AttributeError):
             return
 
+        # Исключаемые категории (не учитываются в финансовых итогах)
+        excluded_categories = ["ЗП окладники", "ЗП проценты", "Комиссия брок"]
+
         # Группируем операции по дням
         daily_data = {}
         total_income = 0
         total_expense = 0
 
+        # Собираем ВСЕ операции для отображения, но разделяем учет
         for transaction in self.transactions:
             try:
                 # Парсим дату
@@ -531,43 +593,56 @@ class MoneyTrackerApp:
                 if year == selected_year and month == month_number:
                     if date_str not in daily_data:
                         daily_data[date_str] = {
-                            'income': 0,
-                            'expense': 0,
-                            'transactions': []
+                            'income': 0,  # Приход (только неисключенные)
+                            'expense': 0,  # Расход (только неисключенные)
+                            'all_income': 0,  # Все приходы (включая исключенные)
+                            'all_expense': 0,  # Все расходы (включая исключенные)
+                            'transactions': []  # Все транзакции
                         }
 
                     amount = abs(transaction["amount"])
-                    if transaction["type"] == "Приход":
-                        daily_data[date_str]['income'] += amount
-                        total_income += amount
-                    else:
-                        daily_data[date_str]['expense'] += amount
-                        total_expense += amount
 
+                    # Всегда добавляем транзакцию в список для детализации
                     daily_data[date_str]['transactions'].append(transaction)
+
+                    # Учитываем ВСЕ операции для отображения
+                    if transaction["type"] == "Приход":
+                        daily_data[date_str]['all_income'] += amount
+                    else:
+                        daily_data[date_str]['all_expense'] += amount
+
+                    # Учитываем только НЕ исключенные категории для финансовых итогов
+                    if transaction["category"] not in excluded_categories:
+                        if transaction["type"] == "Приход":
+                            daily_data[date_str]['income'] += amount
+                            total_income += amount
+                        else:
+                            daily_data[date_str]['expense'] += amount
+                            total_expense += amount
 
             except (ValueError, IndexError):
                 continue
 
-        # Заполняем таблицу ежедневной сводки
+        # Заполняем таблицу ежедневной сводки (показываем ВСЕ операции)
         for date_str in sorted(daily_data.keys(), reverse=True):
             data = daily_data[date_str]
-            balance = data['income'] - data['expense']
-            transactions_count = len(data['transactions'])
+            # Для отображения в таблице используем все операции
+            balance = data['all_income'] - data['all_expense']  # Баланс по всем операциям
+            transactions_count = len(data['transactions'])  # Все операции включая исключенные
 
             self.daily_tree.insert(
                 "",
                 "end",
                 values=(
                     date_str,
-                    f"{data['income']:,.2f}",
-                    f"{data['expense']:,.2f}",
-                    f"{balance:,.2f}",
+                    f"{data['all_income']:,.2f}",  # Все приходы
+                    f"{data['all_expense']:,.2f}",  # Все расходы
+                    f"{balance:,.2f}",  # Баланс по всем операциям
                     transactions_count
                 )
             )
 
-        # Обновляем статистику месяца
+        # Обновляем статистику месяца (только НЕ исключенные категории для финансовых итогов)
         month_balance = total_income - total_expense
         days_with_operations = len(daily_data)
 
@@ -577,7 +652,7 @@ class MoneyTrackerApp:
         self.stats_labels["days_count"].configure(text=f"Дней с операциями: {days_with_operations}")
 
     def on_day_selected(self, event):
-        """Обработчик выбора дня в таблице"""
+        """Обработчик выбора дня в таблице - показывает ВСЕ операции выбранного дня"""
         selected_items = self.daily_tree.selection()
         if not selected_items:
             return
@@ -597,7 +672,7 @@ class MoneyTrackerApp:
         except (ValueError, AttributeError):
             return
 
-        # Заполняем детальную таблицу операциями за выбранный день
+        # Заполняем детальную таблицу ВСЕМИ операциями за выбранный день
         for transaction in self.transactions:
             try:
                 transaction_date = transaction["date"].split()[0]
@@ -619,6 +694,7 @@ class MoneyTrackerApp:
 
             except (ValueError, IndexError):
                 continue
+
 
     # Добавляем метод для обновления данных при изменении транзакций
     def refresh_data(self):
@@ -648,42 +724,6 @@ class MoneyTrackerApp:
         except:
             return datetime.now()
 
-    def update_monthly_chart(self, expenses, year, month):
-        """Обновляет график расходов по дням месяца"""
-        self.ax.clear()
-
-        # Группируем расходы по дням
-        daily_totals = {}
-        for expense in expenses:
-            try:
-                date_str = expense["date"].split()[0]
-                day = int(date_str.split('.')[0])
-                amount = abs(expense["amount"])
-
-                if day not in daily_totals:
-                    daily_totals[day] = 0
-                daily_totals[day] += amount
-            except (ValueError, IndexError):
-                continue
-
-        # Создаем данные для графика
-        days = list(range(1, monthrange(year, month)[1] + 1))
-        amounts = [daily_totals.get(day, 0) for day in days]
-
-        # Строим график
-        self.ax.bar(days, amounts, alpha=0.7, color='red')
-        self.ax.set_xlabel('День месяца', fontsize=12)
-        self.ax.set_ylabel('Сумма расходов (₽)', fontsize=12)
-        self.ax.set_title(f'Расходы за {self.month_combo.get()} {year}', fontsize=14)
-        self.ax.grid(True, alpha=0.3)
-
-        # Форматирование осей
-        self.ax.set_xlim(0.5, len(days) + 0.5)
-        self.ax.set_xticks(days[::2])  # Каждый второй день
-
-        self.fig.tight_layout()
-        self.canvas.draw()
-
     def setup_report_frame(self):
         self.report_frame.grid_columnconfigure(0, weight=1)
         self.report_frame.grid_rowconfigure(1, weight=1)
@@ -692,12 +732,14 @@ class MoneyTrackerApp:
         style.configure("Treeview.Heading", font=self.large_font)
         style.configure("Treeview", font=self.large_font, rowheight=35)
 
+        # Обновляем колонки - добавляем "Тип оплаты"
         columns = {
             "#1": {"name": "date", "text": "Дата", "width": 180, "anchor": "center"},
             "#2": {"name": "type", "text": "Тип", "width": 120, "anchor": "center"},
             "#3": {"name": "amount", "text": "Сумма", "width": 150, "anchor": "e"},
             "#4": {"name": "description", "text": "Описание", "width": 300, "anchor": "center"},
-            "#5": {"name": "category", "text": "Категория", "width": 150, "anchor": "center"}
+            "#5": {"name": "category", "text": "Категория", "width": 150, "anchor": "center"},
+            "#6": {"name": "payment_type", "text": "Тип оплаты", "width": 120, "anchor": "center"}  # Новая колонка
         }
 
         self.tree = ttk.Treeview(self.report_frame, columns=list(columns.keys()), show="headings")
@@ -711,7 +753,7 @@ class MoneyTrackerApp:
             "#3": {"name": "vin", "text": "VIN", "width": 150, "anchor": "center"},
             "#4": {"name": "price", "text": "Цена продажи", "width": 120, "anchor": "e"},
             "#5": {"name": "cost", "text": "Закупочная стоимость", "width": 120, "anchor": "e"},
-            "#6": {"name": "expenses", "text": "Расходы", "width": 120, "anchor": "e"},  # Добавлен столбец расходов
+            "#6": {"name": "expenses", "text": "Расходы", "width": 120, "anchor": "e"},
             "#7": {"name": "profit", "text": "Прибыль", "width": 120, "anchor": "e"},
             "#8": {"name": "comment", "text": "Комментарий", "width": 200, "anchor": "center"}
         }
@@ -720,6 +762,7 @@ class MoneyTrackerApp:
         for col, params in car_columns.items():
             self.car_tree.heading(col, text=params["text"])
             self.car_tree.column(col, width=params["width"], anchor=params.get("anchor", "center"))
+
         scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
         car_scrollbar = ttk.Scrollbar(self.report_frame, orient="vertical")
 
@@ -755,9 +798,8 @@ class MoneyTrackerApp:
 
         self.update_report()
 
-        key_order = ["date", "type", "amount", "description", "category"]
+        key_order = ["date", "type", "amount", "description", "category", "payment_type"]
         car_key_order = ["brand", "year", "vin", "price", "cost", "expenses", "header", "comment"]
-
 
         self.tree.bind(
             "<Double-1>",
@@ -819,39 +861,47 @@ class MoneyTrackerApp:
             tree.item(item, values=values)
             entry.destroy()
 
-            iid = item
+            iid = tree.item(item, "text") if tree == self.tree else item
             data_list = self.get_data_list_by_iid(iid)
             if data_list is None:
                 return
 
-            if iid.startswith("tr_") or iid.startswith("car_"):
+            # Исправлено: правильное получение индекса
+            if iid.startswith("tr_"):
+                index = int(iid.split("_")[1])
+            elif iid.startswith("car_"):
                 index = int(iid.split("_")[1])
             else:
-                index = int(iid)
+                try:
+                    index = int(iid)
+                except ValueError:
+                    return
 
             if index < len(data_list) and col_index < len(key_order):
                 key = key_order[col_index]
                 cleaned = new_val.replace(",", "")
                 try:
-                    if key in ["amount", "price", "cost", "header"]:
+                    if key in ["amount", "price", "cost", "header", "expenses"]:
                         cleaned = float(cleaned)
                 except ValueError:
                     pass
 
                 data_list[index][key] = cleaned
 
-            # Приход/расход
+            # Обновление транзакции
             if iid.startswith("tr_"):
-                self.db.update_transaction(data_list[index]["id"], {key: cleaned})
+                updates = {key_order[col_index]: cleaned}
+                self.db.update_transaction(data_list[index]["id"], updates)
 
-            # Авто-сделка
+            # Обновление авто-сделки
             elif iid.startswith("car_"):
                 updates = {}
                 if key == "price":
                     # При изменении цены пересчитываем прибыль
                     price = float(cleaned)
                     cost = float(data_list[index].get("cost", 0))
-                    header = price - cost
+                    expenses = float(data_list[index].get("expenses", 0))
+                    header = price - cost - expenses
                     updates = {
                         "price": price,
                         "header": header
@@ -860,21 +910,22 @@ class MoneyTrackerApp:
                     # При изменении стоимости пересчитываем прибыль
                     cost = float(cleaned)
                     price = float(data_list[index].get("price", 0))
-                    header = price - cost
+                    expenses = float(data_list[index].get("expenses", 0))
+                    header = price - cost - expenses
                     updates = {
                         "cost": cost,
                         "header": header
                     }
                 elif key == "expenses":
+                    # При изменении расходов пересчитываем прибыль
                     expenses = float(cleaned)
                     price = float(data_list[index].get("price", 0))
                     cost = float(data_list[index].get("cost", 0))
-                    header = price - cost - expenses  # Правильный расчет прибыли с учетом расходов
+                    header = price - cost - expenses
                     updates = {
                         "expenses": expenses,
                         "header": header
                     }
-
                 else:
                     updates = {key: cleaned}
 
@@ -884,22 +935,8 @@ class MoneyTrackerApp:
                 # Обновляем в базе данных
                 self.db.update_car_deal(data_list[index]["id"], updates)
 
-                # Обновляем таблицу
-                self.car_tree.delete(*self.car_tree.get_children())
-                for i, deal in enumerate(self.car_deals):
-                    self.car_tree.insert(
-                        "", "end", iid=f"car_{i}",
-                        values=(
-                            deal.get("brand", ""),
-                            deal.get("year", ""),
-                            deal.get("vin", ""),
-                            f"{deal.get('price', 0):,.2f}",
-                            f"{deal.get('cost', 0):,.2f}",
-                            f"{deal.get('expenses', 0):,.2f}"  # Этой строки не было!
-                            f"{deal.get('header', 0):,.2f}",
-                            deal.get("comment", "")
-                        )
-                    )
+                # Полностью обновляем таблицу
+                self.update_report()
 
             self.update_report()
 
@@ -920,6 +957,7 @@ class MoneyTrackerApp:
             operation = self.entries["Тип операции:"].get()
             amount = float(self.entries["Сумма:"].get())
             description = self.entries["Описание:"].get().strip()
+            payment_type = self.entries["Тип оплаты:"].get()
             category = self.entries["Категория:"].get()
 
             if not description:
@@ -934,7 +972,8 @@ class MoneyTrackerApp:
                 "type": operation,
                 "amount": amount if operation == "Приход" else -amount,
                 "description": description,
-                "category": category
+                "category": category,
+                "payment_type": payment_type
             }
 
             self.db.add_transaction(transaction)
@@ -1004,7 +1043,8 @@ class MoneyTrackerApp:
                     tr["type"],
                     f"{abs(tr['amount']):,.2f}",
                     tr["description"],
-                    tr["category"]
+                    tr["category"],
+                    tr.get("payment_type", "Наличные")  # Добавляем тип оплаты
                 )
             )
 
@@ -1017,7 +1057,7 @@ class MoneyTrackerApp:
                     deal.get("vin", ""),
                     f"{deal.get('price', 0):,.2f}",
                     f"{deal.get('cost', 0):,.2f}",
-                    f"{deal.get('expenses', 0):,.2f}",  # Исправлено: добавлены расходы
+                    f"{deal.get('expenses', 0):,.2f}",
                     f"{deal.get('header', 0):,.2f}",
                     deal.get("comment", "")
                 )
@@ -1026,8 +1066,17 @@ class MoneyTrackerApp:
         self.update_summary()
 
     def update_summary(self):
-        total_income = sum(t["amount"] for t in self.transactions if t["type"] == "Приход")
-        total_expense = abs(sum(t["amount"] for t in self.transactions if t["type"] == "Расход"))
+        # Исключаемые категории (не учитываются в общем приходе/расходе)
+        excluded_categories = ["ЗП окладники", "ЗП проценты", "Комиссия брок"]
+
+        # Фильтруем транзакции, исключая указанные категории
+        filtered_transactions = [
+            t for t in self.transactions
+            if t["category"] not in excluded_categories
+        ]
+
+        total_income = sum(t["amount"] for t in filtered_transactions if t["type"] == "Приход")
+        total_expense = abs(sum(t["amount"] for t in filtered_transactions if t["type"] == "Расход"))
 
         additional_investment = max(0, total_expense - self.initial_capital)
         car_profit = sum(deal.get("header", 0) for deal in self.car_deals)
@@ -1066,7 +1115,8 @@ class MoneyTrackerApp:
                                 "type": row.get("type", "Приход"),
                                 "amount": float(row.get("amount", 0)),
                                 "description": str(row.get("description", "")),
-                                "category": row.get("category", "Наличные")
+                                "category": row.get("category", "Другое"),
+                                "payment_type": row.get("payment_type", "Наличные")
                             }
                             if not self.db.exists_transaction(transaction):
                                 self.db.add_transaction(transaction)
