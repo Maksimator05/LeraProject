@@ -23,9 +23,7 @@ class DatabaseManager:
     def create_tables(self):
         cursor = self.conn.cursor()
 
-        # Удаляем старую таблицу и создаем новую с полем payment_type
-        cursor.execute("DROP TABLE IF EXISTS transactions")
-
+        # Создаем таблицу транзакций (без удаления существующей)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -37,6 +35,15 @@ class DatabaseManager:
                 payment_type TEXT NOT NULL DEFAULT 'Наличные'
             )
         """)
+
+        # Проверяем наличие столбца payment_type и добавляем его, если нужно
+        try:
+            cursor.execute("PRAGMA table_info(transactions)")
+            columns = [column[1] for column in cursor.fetchall()]
+            if 'payment_type' not in columns:
+                cursor.execute("ALTER TABLE transactions ADD COLUMN payment_type TEXT NOT NULL DEFAULT 'Наличные'")
+        except sqlite3.Error as e:
+            print(f"Ошибка при проверке столбцов: {e}")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS car_deals (
@@ -51,6 +58,12 @@ class DatabaseManager:
                 header REAL DEFAULT 0
             )
         """)
+
+        # Проверяем наличие столбца expenses и добавляем его, если нужно
+        try:
+            cursor.execute("SELECT expenses FROM car_deals LIMIT 1")
+        except sqlite3.OperationalError:
+            cursor.execute("ALTER TABLE car_deals ADD COLUMN expenses REAL DEFAULT 0")
 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS settings (
@@ -99,18 +112,22 @@ class DatabaseManager:
 
     def exists_transaction(self, transaction: Dict) -> bool:
         cursor = self.conn.cursor()
+
+        # Более гибкая проверка: ищем похожие транзакции (без точного совпадения даты)
         cursor.execute("""
             SELECT COUNT(*) FROM transactions
-            WHERE date = ? AND type = ? AND amount = ? AND description = ? 
+            WHERE type = ? AND amount = ? AND description = ? 
             AND category = ? AND payment_type = ?
+            AND date LIKE ?
         """, (
-            transaction["date"],
             transaction["type"],
             transaction["amount"],
             transaction["description"],
             transaction["category"],
-            transaction.get("payment_type", "Наличные")
+            transaction.get("payment_type", "Наличные"),
+            f"%{transaction['date'].split()[0]}%"  # Ищем по дате (без времени)
         ))
+
         return cursor.fetchone()[0] > 0
 
     # ---------------- Авто-сделки ----------------
@@ -150,17 +167,20 @@ class DatabaseManager:
 
     def exists_car_deal(self, car_deal: Dict) -> bool:
         cursor = self.conn.cursor()
+
+        # Более гибкая проверка: не требуем точного совпадения всех полей
         cursor.execute("""
             SELECT COUNT(*) FROM car_deals
-            WHERE brand = ? AND year = ? AND vin = ? AND price = ? AND cost = ? AND comment = ?
+            WHERE brand = ? AND year = ? AND vin = ?
+            AND ABS(price - ?) < 0.01 AND ABS(cost - ?) < 0.01
         """, (
             car_deal["brand"],
             car_deal["year"],
             car_deal["vin"],
-            car_deal["price"],
-            car_deal["cost"],
-            car_deal.get("comment", "")
+            car_deal.get("price", 0),
+            car_deal.get("cost", 0)
         ))
+
         return cursor.fetchone()[0] > 0
 
     # ---------------- Настройки ----------------
@@ -177,19 +197,27 @@ class DatabaseManager:
         return cursor.rowcount > 0
 
     # ---------------- Экспорт / импорт ----------------
-    def export_to_excel(self, file_path: str) -> bool:
+    def export_to_excel(self, file_path: str, monthly_data: Dict = None) -> bool:
         try:
             with pd.ExcelWriter(file_path, engine="openpyxl") as writer:
                 # Экспорт транзакций
                 transactions = self.get_all_transactions()
                 if transactions:
-                    # В методе export_to_excel() в секции экспорта транзакций:
-                    pd.DataFrame(transactions).to_excel(
+                    df_transactions = pd.DataFrame(transactions)
+                    # Переименовываем колонки для удобства
+                    df_transactions = df_transactions.rename(columns={
+                        "date": "Дата",
+                        "type": "Тип",
+                        "amount": "Сумма",
+                        "description": "Описание",
+                        "category": "Категория",
+                        "payment_type": "Тип_оплаты"
+                    })
+                    df_transactions.to_excel(
                         writer,
                         sheet_name="Транзакции",
                         index=False,
-                        columns=["date", "type", "amount", "description", "category", "payment_type"]
-                        # Добавляем payment_type
+                        columns=["Дата", "Тип", "Сумма", "Описание", "Категория", "Тип_оплаты"]
                     )
 
                 # Экспорт авто-сделок
@@ -197,91 +225,197 @@ class DatabaseManager:
                 if car_deals:
                     df_car_deals = pd.DataFrame(car_deals)
                     df_car_deals = df_car_deals.rename(columns={
+                        "brand": "Марка",
                         "year": "Год",
-                        "header": "Прибыль"
+                        "vin": "VIN",
+                        "price": "Цена_продажи",
+                        "cost": "Закупочная_стоимость",
+                        "expenses": "Расходы",
+                        "header": "Прибыль",
+                        "comment": "Комментарий"
                     })
                     df_car_deals.to_excel(
                         writer,
                         sheet_name="Авто-сделки",
                         index=False,
-                        columns=["brand", "Год", "vin", "price", "cost", "Прибыль", "comment"]
+                        columns=["Марка", "Год", "VIN", "Цена_продажи", "Закупочная_стоимость", "Расходы", "Прибыль",
+                                 "Комментарий"]
                     )
 
                 # Экспорт настроек
                 settings_data = {
-                    "initial_capital": [self.get_initial_capital()]
+                    "Стартовый_капитал": [self.get_initial_capital()]
                 }
                 pd.DataFrame(settings_data).to_excel(
                     writer, sheet_name="Настройки", index=False
                 )
+
+                # Экспорт месячного отчета (если предоставлены данные)
+                if monthly_data:
+                    # Ежедневная сводка
+                    if 'daily_summary' in monthly_data and monthly_data['daily_summary']:
+                        daily_df = pd.DataFrame(monthly_data['daily_summary'])
+                        daily_df.to_excel(
+                            writer,
+                            sheet_name="Месяц_Ежедневно",
+                            index=False
+                        )
+
+                    # Детализация операций
+                    if 'daily_details' in monthly_data and monthly_data['daily_details']:
+                        details_df = pd.DataFrame(monthly_data['daily_details'])
+                        details_df.to_excel(
+                            writer,
+                            sheet_name="Месяц_Операции",
+                            index=False
+                        )
+
+                    # Статистика по категориям
+                    if 'category_stats' in monthly_data and monthly_data['category_stats']:
+                        stats_df = pd.DataFrame(list(monthly_data['category_stats'].items()),
+                                                columns=['Категория', 'Сумма'])
+                        stats_df.to_excel(
+                            writer,
+                            sheet_name="Месяц_Категории",
+                            index=False
+                        )
+
+                    # Общая информация о месяце
+                    if 'month_info' in monthly_data:
+                        month_info_df = pd.DataFrame([monthly_data['month_info']])
+                        month_info_df.to_excel(
+                            writer,
+                            sheet_name="Месяц_Инфо",
+                            index=False
+                        )
+
             return True
         except Exception as e:
             print(f"Ошибка при экспорте: {e}")
             return False
 
-    def import_from_excel(self, file_path: str) -> bool:
+    def import_from_excel(self):
+        path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
+        if not path:
+            return
+
         try:
-            with pd.ExcelFile(file_path) as xls:
-                # Импорт транзакций
-                if "Транзакции" in xls.sheet_names:
-                    df = pd.read_excel(xls, sheet_name="Транзакции")
-                    for _, row in df.iterrows():
-                        try:
-                            transaction = {
-                                "date": row.get("date", datetime.now().strftime("%d.%m.%Y %H:%M")),
-                                "type": row.get("type", "Приход"),
-                                "amount": float(row.get("amount", 0)),
-                                "description": str(row.get("description", "")),
-                                "category": row.get("category", "Другое"),
-                                "payment_type": row.get("payment_type", "Наличные")
-                            }
-                            if not self.exists_transaction(transaction):
-                                self.add_transaction(transaction)
-                        except Exception as e:
-                            print(f"Ошибка при импорте транзакции: {e}")
+            imported_count = {
+                'transactions': 0,
+                'car_deals': 0
+            }
+
+            with pd.ExcelFile(path) as xls:
+                sheet_names = xls.sheet_names
+
+                # Импорт транзакций (обрабатываем разные варианты названий листов)
+                transaction_sheets = ['Транзакции', 'Transactions', 'Месяц_Операции']
+                for sheet_name in transaction_sheets:
+                    if sheet_name in sheet_names:
+                        df = pd.read_excel(xls, sheet_name=sheet_name)
+                        for _, row in df.iterrows():
+                            try:
+                                # Обрабатываем разные форматы названий колонок
+                                date = row.get("date", row.get("Дата", datetime.now().strftime("%d.%m.%Y %H:%M")))
+                                trans_type = row.get("type", row.get("Тип", "Приход"))
+                                amount = float(row.get("amount", row.get("Сумма", 0)))
+                                description = str(row.get("description", row.get("Описание", "")))
+                                category = row.get("category", row.get("Категория", "Другое"))
+                                payment_type = row.get("payment_type", row.get("Тип_оплаты", "Наличные"))
+
+                                transaction = {
+                                    "date": date,
+                                    "type": trans_type,
+                                    "amount": amount if trans_type == "Приход" else -amount,
+                                    "description": description,
+                                    "category": category,
+                                    "payment_type": payment_type
+                                }
+
+                                if not self.db.exists_transaction(transaction):
+                                    self.db.add_transaction(transaction)
+                                    imported_count['transactions'] += 1
+
+                            except Exception as e:
+                                print(f"Ошибка при импорте транзакции: {e}")
 
                 # Импорт авто-сделок
-                if "Авто-сделки" in xls.sheet_names:
-                    df = pd.read_excel(xls, sheet_name="Авто-сделки")
-                    for _, row in df.iterrows():
-                        try:
-                            brand = str(row.get("brand", row.get("Марка", ""))).strip()
-                            if not brand:
-                                continue
-                            year = str(row.get("Год", row.get("year", ""))).strip()
-                            vin = str(row.get("vin", row.get("VIN", ""))).strip()
-                            price = float(row.get("price", row.get("Цена", 0)))
-                            cost = float(row.get("cost", row.get("Стоимость", 0)))
-                            profit = float(row.get("Прибыль", row.get("profit", row.get("header", price - cost))))
-                            comment = str(row.get("comment", row.get("Комментарий", "")))
+                car_sheets = ['Авто-сделки', 'CarDeals', 'Площадка']
+                for sheet_name in car_sheets:
+                    if sheet_name in sheet_names:
+                        df = pd.read_excel(xls, sheet_name=sheet_name)
+                        for _, row in df.iterrows():
+                            try:
+                                brand = str(row.get("brand", row.get("Марка", row.get("Модель", ""))).strip())
+                                if not brand:
+                                    continue
 
-                            car_deal = {
-                                "brand": brand,
-                                "year": year,
-                                "vin": vin,
-                                "price": price,
-                                "cost": cost,
-                                "header": profit,
-                                "comment": comment
-                            }
-                            if not self.exists_car_deal(car_deal):
-                                self.add_car_deal(car_deal)
-                        except Exception as e:
-                            print(f"Ошибка при импорте авто-сделки: {e}")
+                                year = str(row.get("year", row.get("Год", ""))).strip()
+                                vin = str(row.get("vin", row.get("VIN", ""))).strip()
+                                price = float(row.get("price", row.get("Цена_продажи", row.get("Цена", 0))))
+                                cost = float(row.get("cost", row.get("Закупочная_стоимость", row.get("Стоимость", 0))))
+                                expenses = float(row.get("expenses", row.get("Расходы", 0)))
+                                profit = float(
+                                    row.get("profit", row.get("Прибыль", row.get("header", price - cost - expenses))))
+                                comment = str(row.get("comment", row.get("Комментарий", "")))
+
+                                car_deal = {
+                                    "brand": brand,
+                                    "year": year,
+                                    "vin": vin,
+                                    "price": price,
+                                    "cost": cost,
+                                    "expenses": expenses,
+                                    "header": profit,
+                                    "comment": comment
+                                }
+                                if not self.db.exists_car_deal(car_deal):
+                                    self.db.add_car_deal(car_deal)
+                                    imported_count['car_deals'] += 1
+
+                            except Exception as e:
+                                print(f"Ошибка при импорте авто-сделки: {e}")
 
                 # Импорт настроек
-                if "Настройки" in xls.sheet_names:
-                    df = pd.read_excel(xls, sheet_name="Настройки")
-                    if "initial_capital" in df.columns:
-                        try:
-                            capital = float(df.iloc[0]["initial_capital"])
-                            self.update_initial_capital(capital)
-                        except:
-                            pass
-            return True
+                settings_sheets = ['Настройки', 'Settings', 'Config']
+                for sheet_name in settings_sheets:
+                    if sheet_name in sheet_names:
+                        df = pd.read_excel(xls, sheet_name=sheet_name)
+                        capital_columns = ['initial_capital', 'Стартовый_капитал']
+                        for col in capital_columns:
+                            if col in df.columns:
+                                try:
+                                    capital = float(df.iloc[0][col])
+                                    self.db.update_initial_capital(capital)
+                                    self.initial_capital = capital
+                                    break
+                                except:
+                                    pass
+
+            # Обновляем данные из базы
+            self.transactions = self.db.get_all_transactions()
+            self.car_deals = self.db.get_all_car_deals()
+            self.initial_capital = self.db.get_initial_capital()
+
+            # Обновление поля капитала
+            self.capital_entry.delete(0, tk.END)
+            self.capital_entry.insert(0, str(self.initial_capital))
+
+            # Полностью обновляем отчёты
+            self.update_report()
+            self.update_monthly_report()
+
+            messagebox.showinfo(
+                "Успех",
+                f"Данные успешно импортированы из Excel!\n\n"
+                f"Добавлено:\n"
+                f"• Транзакций: {imported_count['transactions']}\n"
+                f"• Авто-сделок: {imported_count['car_deals']}\n"
+                f"• Стартовый капитал: {self.initial_capital:,.2f} ₽"
+            )
+
         except Exception as e:
-            print(f"Ошибка при импорте: {e}")
-            return False
+            messagebox.showerror("Ошибка", f"Ошибка при импорте: {str(e)}")
 
     # ---------------- Закрытие соединения ----------------
     def close(self):
@@ -418,7 +552,7 @@ class MoneyTrackerApp:
             ("Цена продажи с учетом опций:", "entry", None, "0"),
             ("Закупочная стоимость:", "entry", None, "0"),
             ("Расходы:", "entry", None, "0"),
-            ("Комментарий оплаты:", "entry", None, "")
+            ("Комментарий:", "entry", None, "")
         ]
 
         self.car_entries = {}
@@ -485,6 +619,15 @@ class MoneyTrackerApp:
         self.month_combo.grid(row=0, column=3, padx=(0, 20), pady=5, sticky="w")
         self.month_combo.configure(command=lambda event: self.update_monthly_report())
 
+        # Добавьте после выбора месяца
+        info_label = ctk.CTkLabel(
+            inner_frame,
+            text="💡 Данные месяца включаются в полный экспорт (кнопка в Настройках)",
+            text_color="#FFD700",
+            font=("Arial", 12)
+        )
+        info_label.grid(row=0, column=4, padx=(20, 0), pady=5, sticky="w")
+
         # Таблица с ежедневной сводкой
         daily_columns = {
             "#1": {"name": "date", "text": "Дата", "width": 100, "anchor": "center"},
@@ -506,7 +649,7 @@ class MoneyTrackerApp:
             "#2": {"name": "type", "text": "Тип", "width": 80, "anchor": "center"},
             "#3": {"name": "description", "text": "Описание", "width": 250, "anchor": "center"},
             "#4": {"name": "category", "text": "Категория", "width": 120, "anchor": "center"},
-            "#5": {"name": "amount", "text": "Сумма", "width": 120, "anchor": "e"}
+            "#5": {"name": "amount", "text": "Сумma", "width": 120, "anchor": "e"}
         }
 
         self.detail_tree = ttk.Treeview(self.monthly_frame, columns=list(detail_columns.keys()), show="headings",
@@ -535,19 +678,31 @@ class MoneyTrackerApp:
         self.detail_tree.grid(row=4, column=0, sticky="nsew", padx=(10, 0), pady=(0, 10))
         scrollbar_y2.grid(row=4, column=1, sticky="ns", pady=(0, 10))
 
-        # Панель статистики месяца
-        stats_frame = ctk.CTkFrame(self.monthly_frame)
-        stats_frame.grid(row=5, column=0, columnspan=2, sticky="we", padx=10, pady=10)
+        # Новая панель статистики по категориям (распределяем по горизонтали)
+        categories_frame = ctk.CTkFrame(self.monthly_frame)
+        categories_frame.grid(row=5, column=0, columnspan=2, sticky="we", padx=10, pady=10)
 
-        self.stats_labels = {
-            "total_income": ctk.CTkLabel(stats_frame, text="Общий приход: 0.00 ₽", font=self.xlarge_font),
-            "total_expense": ctk.CTkLabel(stats_frame, text="Общий расход: 0.00 ₽", font=self.xlarge_font),
-            "month_balance": ctk.CTkLabel(stats_frame, text="Итог за месяц: 0.00 ₽", font=self.xxlarge_font),
-            "days_count": ctk.CTkLabel(stats_frame, text="Дней с операциями: 0", font=self.large_font)
-        }
+        # Настраиваем grid для равномерного распределения
+        for i in range(5):  # 5 колонок
+            categories_frame.grid_columnconfigure(i, weight=1)
 
-        for i, (key, label) in enumerate(self.stats_labels.items()):
-            label.grid(row=0, column=i, padx=15, pady=5)
+        # Категории для статистики
+        self.categories = [
+            "Аренда", "Дилерство", "Наличные", "Безнал", "КЦ",
+            "ЗП окладники", "ЗП проценты", "Реклама", "Вед.рекламы", "Комиссия брок"
+        ]
+
+        self.category_labels = {}
+        for i, category in enumerate(self.categories):
+            frame = ctk.CTkFrame(categories_frame, height=60)
+            frame.grid(row=i // 5, column=i % 5, padx=5, pady=5, sticky="nsew")
+            frame.grid_propagate(False)
+
+            ctk.CTkLabel(frame, text=category, font=self.large_font,
+                         wraplength=100).pack(pady=(5, 0))  # Перенос текста
+            self.category_labels[category] = ctk.CTkLabel(frame, text="0.00 ₽",
+                                                          font=self.large_font)
+            self.category_labels[category].pack()
 
         # Настройка весов для растягивания
         self.monthly_frame.grid_rowconfigure(2, weight=1)
@@ -575,15 +730,13 @@ class MoneyTrackerApp:
         except (ValueError, AttributeError):
             return
 
-        # Исключаемые категории (не учитываются в финансовых итогах)
-        excluded_categories = ["ЗП окладники", "ЗП проценты", "Комиссия брок"]
-
         # Группируем операции по дням
         daily_data = {}
-        total_income = 0
-        total_expense = 0
 
-        # Собираем ВСЕ операции для отображения, но разделяем учет
+        # Словарь для статистики по категориям
+        category_stats = {category: 0 for category in self.categories}
+
+        # Собираем ВСЕ операции для отображения
         for transaction in self.transactions:
             try:
                 # Парсим дату
@@ -593,10 +746,8 @@ class MoneyTrackerApp:
                 if year == selected_year and month == month_number:
                     if date_str not in daily_data:
                         daily_data[date_str] = {
-                            'income': 0,  # Приход (только неисключенные)
-                            'expense': 0,  # Расход (только неисключенные)
-                            'all_income': 0,  # Все приходы (включая исключенные)
-                            'all_expense': 0,  # Все расходы (включая исключенные)
+                            'all_income': 0,  # Все приходы
+                            'all_expense': 0,  # Все расходы
                             'transactions': []  # Все транзакции
                         }
 
@@ -611,14 +762,13 @@ class MoneyTrackerApp:
                     else:
                         daily_data[date_str]['all_expense'] += amount
 
-                    # Учитываем только НЕ исключенные категории для финансовых итогов
-                    if transaction["category"] not in excluded_categories:
-                        if transaction["type"] == "Приход":
-                            daily_data[date_str]['income'] += amount
-                            total_income += amount
+                    # Собираем статистику по всем категориям (и приход и расход)
+                    category = transaction["category"]
+                    if category in category_stats:
+                        if transaction["type"] == "Расход":
+                            category_stats[category] += amount
                         else:
-                            daily_data[date_str]['expense'] += amount
-                            total_expense += amount
+                            category_stats[category] -= amount  # Приход уменьшает расход по категории
 
             except (ValueError, IndexError):
                 continue
@@ -642,14 +792,177 @@ class MoneyTrackerApp:
                 )
             )
 
-        # Обновляем статистику месяца (только НЕ исключенные категории для финансовых итогов)
-        month_balance = total_income - total_expense
-        days_with_operations = len(daily_data)
+        # Обновляем статистику по категориям
+        for category, amount in category_stats.items():
+            self.category_labels[category].configure(text=f"{abs(amount):,.2f} ₽")
 
-        self.stats_labels["total_income"].configure(text=f"Общий приход: {total_income:,.2f} ₽")
-        self.stats_labels["total_expense"].configure(text=f"Общий расход: {total_expense:,.2f} ₽")
-        self.stats_labels["month_balance"].configure(text=f"Итог за месяц: {month_balance:,.2f} ₽")
-        self.stats_labels["days_count"].configure(text=f"Дней с операциями: {days_with_operations}")
+    def get_monthly_report_data(self) -> Dict:
+        """Собирает данные для месячного отчета"""
+        try:
+            selected_year = int(self.year_combo.get())
+            selected_month = self.month_combo.get()
+            month_number = self.get_month_number(selected_month)
+        except (ValueError, AttributeError):
+            return {}
+
+        daily_data = {}
+        category_stats = {category: 0 for category in self.categories}
+        all_daily_details = []
+
+        total_income = 0
+        total_expense = 0
+
+        # Собираем данные
+        for transaction in self.transactions:
+            try:
+                date_str = transaction["date"].split()[0]
+                day, month, year = map(int, date_str.split('.'))
+
+                if year == selected_year and month == month_number:
+                    if date_str not in daily_data:
+                        daily_data[date_str] = {
+                            'all_income': 0,
+                            'all_expense': 0,
+                            'transactions': []
+                        }
+
+                    amount = abs(transaction["amount"])
+                    daily_data[date_str]['transactions'].append(transaction)
+
+                    if transaction["type"] == "Приход":
+                        daily_data[date_str]['all_income'] += amount
+                        total_income += amount
+                    else:
+                        daily_data[date_str]['all_expense'] += amount
+                        total_expense += amount
+
+                    # Статистика по категориям
+                    category = transaction["category"]
+                    if category in category_stats:
+                        if transaction["type"] == "Расход":
+                            category_stats[category] += amount
+                        else:
+                            category_stats[category] -= amount
+
+                    # Добавляем в детализацию
+                    all_daily_details.append({
+                        'Дата': transaction["date"],
+                        'День': date_str,
+                        'Тип': transaction["type"],
+                        'Описание': transaction["description"],
+                        'Категория': transaction["category"],
+                        'Тип_оплаты': transaction.get("payment_type", "Наличные"),
+                        'Сумма': abs(transaction['amount']),
+                        'Сумма_руб': f"{abs(transaction['amount']):,.2f} ₽"
+                    })
+
+            except (ValueError, IndexError):
+                continue
+
+        # Формируем ежедневную сводку
+        daily_summary = []
+        for date_str in sorted(daily_data.keys()):
+            data = daily_data[date_str]
+            balance = data['all_income'] - data['all_expense']
+            transactions_count = len(data['transactions'])
+
+            daily_summary.append({
+                'Дата': date_str,
+                'Приход': data['all_income'],
+                'Расход': data['all_expense'],
+                'Баланс': balance,
+                'Количество_операций': transactions_count,
+                'Приход_руб': f"{data['all_income']:,.2f} ₽",
+                'Расход_руб': f"{data['all_expense']:,.2f} ₽",
+                'Баланс_руб': f"{balance:,.2f} ₽"
+            })
+
+        # Информация о месяце
+        month_info = {
+            'Год': selected_year,
+            'Месяц': selected_month,
+            'Всего_дней_с_операциями': len(daily_summary),
+            'Общий_приход': total_income,
+            'Общий_расход': total_expense,
+            'Итоговый_баланс': total_income - total_expense,
+            'Общий_приход_руб': f"{total_income:,.2f} ₽",
+            'Общий_расход_руб': f"{total_expense:,.2f} ₽",
+            'Итоговый_баланс_руб': f"{total_income - total_expense:,.2f} ₽"
+        }
+
+        # Преобразуем статистику по категориям в удобный формат
+        formatted_category_stats = {}
+        for category, amount in category_stats.items():
+            formatted_category_stats[category] = {
+                'Сумма': abs(amount),
+                'Сумма_руб': f"{abs(amount):,.2f} ₽",
+                'Тип': 'Расход' if amount > 0 else 'Приход'
+            }
+
+        return {
+            'daily_summary': daily_summary,
+            'daily_details': all_daily_details,
+            'category_stats': formatted_category_stats,
+            'month_info': month_info
+        }
+
+    def export_monthly_report(self):
+        """Экспорт только месячного отчета"""
+        path = filedialog.asksaveasfilename(
+            defaultextension=".xlsx",
+            filetypes=[("Excel files", "*.xlsx")],
+            title="Сохранить месячный отчет как"
+        )
+        if not path:
+            return
+
+        try:
+            monthly_data = self.get_monthly_report_data()
+
+            if monthly_data:
+                with pd.ExcelWriter(path, engine="openpyxl") as writer:
+                    # Ежедневная сводка
+                    if 'daily_summary' in monthly_data and monthly_data['daily_summary']:
+                        pd.DataFrame(monthly_data['daily_summary']).to_excel(
+                            writer,
+                            sheet_name="Ежедневная_сводка",
+                            index=False
+                        )
+
+                    # Детализация операций
+                    if 'daily_details' in monthly_data and monthly_data['daily_details']:
+                        pd.DataFrame(monthly_data['daily_details']).to_excel(
+                            writer,
+                            sheet_name="Детализация_операций",
+                            index=False
+                        )
+
+                    # Статистика по категориям
+                    if 'category_stats' in monthly_data and monthly_data['category_stats']:
+                        stats_df = pd.DataFrame(list(monthly_data['category_stats'].items()),
+                                                columns=['Категория', 'Сумма'])
+                        stats_df.to_excel(
+                            writer,
+                            sheet_name="Статистика_по_категориям",
+                            index=False
+                        )
+
+                    # Общая информация
+                    if 'month_info' in monthly_data:
+                        pd.DataFrame([monthly_data['month_info']]).to_excel(
+                            writer,
+                            sheet_name="Общая_информация",
+                            index=False
+                        )
+
+                messagebox.showinfo("Успех", "Месячный отчет успешно экспортирован в Excel")
+            else:
+                messagebox.showwarning("Предупреждение", "Нет данных для экспорта за выбранный месяц")
+
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка при экспорте месячного отчета: {str(e)}")
+
+
 
     def on_day_selected(self, event):
         """Обработчик выбора дня в таблице - показывает ВСЕ операции выбранного дня"""
@@ -837,6 +1150,7 @@ class MoneyTrackerApp:
         ctk.CTkButton(self.settings_frame, text="💾 Сохранить капитал", command=save_capital).pack(pady=10)
         ctk.CTkButton(self.settings_frame, text="📥 Импорт из Excel", command=self.import_from_excel).pack(pady=10)
         ctk.CTkButton(self.settings_frame, text="📤 Экспорт в Excel", command=self.export_to_excel).pack(pady=10)
+
 
     def get_data_list_by_iid(self, iid):
         if iid.startswith("tr_"):
@@ -1090,94 +1404,181 @@ class MoneyTrackerApp:
         self.summary_labels["total_profit"].configure(text=f"{total_profit:,.2f} ₽")
 
     def import_from_excel(self):
-        path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx")])
+        path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
         if not path:
             return
 
         try:
+            imported_count = {
+                'transactions': 0,
+                'car_deals': 0
+            }
+
             with pd.ExcelFile(path) as xls:
-                # Получаем список всех листов в файле
                 sheet_names = xls.sheet_names
 
-                # Импорт транзакций (проверяем разные варианты названий)
-                transaction_sheet = None
-                for name in ['Транзакции', 'Transactions']:
-                    if name in sheet_names:
-                        transaction_sheet = name
-                        break
+                # Импорт транзакций
+                transaction_sheets = ['Транзакции', 'Transactions']
+                for sheet_name in transaction_sheets:
+                    if sheet_name in sheet_names:
+                        df = pd.read_excel(xls, sheet_name=sheet_name)
+                        print(f"Найдено {len(df)} транзакций в листе {sheet_name}")
 
-                if transaction_sheet:
-                    df = pd.read_excel(xls, sheet_name=transaction_sheet)
-                    for _, row in df.iterrows():
-                        try:
-                            transaction = {
-                                "date": row.get("date", datetime.now().strftime("%d.%m.%Y %H:%M")),
-                                "type": row.get("type", "Приход"),
-                                "amount": float(row.get("amount", 0)),
-                                "description": str(row.get("description", "")),
-                                "category": row.get("category", "Другое"),
-                                "payment_type": row.get("payment_type", "Наличные")
-                            }
-                            if not self.db.exists_transaction(transaction):
-                                self.db.add_transaction(transaction)
+                        for index, row in df.iterrows():
+                            try:
+                                # Отладочная информация
+                                print(f"Обрабатываем строку {index}: {dict(row)}")
 
-                        except Exception as e:
-                            print(f"Ошибка при импорте транзакции: {e}")
+                                # Обрабатываем разные форматы названий колонок
+                                date_value = row.get("date", row.get("Дата", ""))
+                                if pd.isna(date_value):
+                                    date_value = datetime.now().strftime("%d.%m.%Y %H:%M")
+                                else:
+                                    # Конвертируем дату из Excel в правильный формат
+                                    if isinstance(date_value, datetime):
+                                        date_value = date_value.strftime("%d.%m.%Y %H:%M")
+                                    elif isinstance(date_value, str):
+                                        # Если это строка, оставляем как есть
+                                        pass
+                                    else:
+                                        # Для других типов (например, timestamp)
+                                        date_value = datetime.now().strftime("%d.%m.%Y %H:%M")
 
-                # Импорт авто-сделок (проверяем разные варианты названий)
-                car_sheet = None
-                for name in ['Площадка', 'Авто-сделки', 'CarDeals']:
-                    if name in sheet_names:
-                        car_sheet = name
-                        break
+                                trans_type = row.get("type", row.get("Тип", "Приход"))
+                                if pd.isna(trans_type):
+                                    trans_type = "Приход"
 
-                if car_sheet:
-                    df = pd.read_excel(xls, sheet_name=car_sheet)
-                    for _, row in df.iterrows():
-                        try:
-                            # Проверяем обязательное поле brand (разные варианты названий)
-                            brand = str(row.get("brand", row.get("Марка", row.get("Модель", ""))).strip())
-                            if not brand:
-                                continue  # Пропускаем записи без марки авто
+                                amount = float(row.get("amount", row.get("Сумма", 0)))
+                                if pd.isna(amount):
+                                    amount = 0
 
-                            year = str(row.get("year", row.get("Год", ""))).strip()
-                            vin = str(row.get("vin", row.get("VIN", ""))).strip()
-                            price = float(row.get("price", row.get("Цена", 0)))
-                            cost = float(row.get("cost", row.get("Стоимость", 0)))
-                            profit = float(row.get("profit", row.get("Прибыль", row.get("header", price - cost))))
-                            comment = str(row.get("comment", row.get("Комментарий", "")))
+                                description = str(row.get("description", row.get("Описание", "")))
+                                if pd.isna(description):
+                                    description = ""
 
-                            car_deal = {
-                                "brand": brand,
-                                "year": year,
-                                "vin": vin,
-                                "price": price,
-                                "cost": cost,
-                                "header": profit,
-                                "comment": comment
-                            }
-                            if not self.db.exists_car_deal(car_deal):
-                                self.db.add_car_deal(car_deal)
+                                category = row.get("category", row.get("Категория", "Другое"))
+                                if pd.isna(category):
+                                    category = "Другое"
 
-                        except Exception as e:
-                            print(f"Ошибка при импорте авто-сделки: {e}")
+                                payment_type = row.get("payment_type", row.get("Тип_оплаты", "Наличные"))
+                                if pd.isna(payment_type):
+                                    payment_type = "Наличные"
 
-                # Импорт настроек (проверяем разные варианты названий)
-                settings_sheet = None
-                for name in ['Настройки', 'Settings', 'Config']:
-                    if name in sheet_names:
-                        settings_sheet = name
-                        break
+                                # Корректируем amount в зависимости от типа
+                                if trans_type == "Расход":
+                                    amount = -abs(amount)
+                                else:
+                                    amount = abs(amount)
 
-                if settings_sheet:
-                    df = pd.read_excel(xls, sheet_name=settings_sheet)
-                    if "initial_capital" in df.columns:
-                        try:
-                            capital = float(df.iloc[0]["initial_capital"])
-                            self.db.update_initial_capital(capital)
-                            self.initial_capital = capital
-                        except:
-                            pass
+                                transaction = {
+                                    "date": str(date_value),
+                                    "type": str(trans_type),
+                                    "amount": amount,
+                                    "description": str(description).strip(),
+                                    "category": str(category),
+                                    "payment_type": str(payment_type)
+                                }
+
+                                print(f"Создана транзакция: {transaction}")
+
+                                if not self.db.exists_transaction(transaction):
+                                    self.db.add_transaction(transaction)
+                                    imported_count['transactions'] += 1
+                                    print(f"Транзакция добавлена: {imported_count['transactions']}")
+                                else:
+                                    print("Транзакция уже существует, пропускаем")
+
+                            except Exception as e:
+                                print(f"Ошибка при импорте транзакции в строке {index}: {e}")
+                                import traceback
+                                traceback.print_exc()
+
+                # Импорт авто-сделок
+                car_sheets = ['Авто-сделки', 'CarDeals']
+                for sheet_name in car_sheets:
+                    if sheet_name in sheet_names:
+                        df = pd.read_excel(xls, sheet_name=sheet_name)
+                        print(f"Найдено {len(df)} авто-сделок в листе {sheet_name}")
+
+                        for index, row in df.iterrows():
+                            try:
+                                brand = str(row.get("brand", row.get("Марка", ""))).strip()
+                                if pd.isna(brand) or not brand:
+                                    continue
+
+                                year = str(row.get("year", row.get("Год", ""))).strip()
+                                if pd.isna(year):
+                                    year = ""
+
+                                vin = str(row.get("vin", row.get("VIN", ""))).strip()
+                                if pd.isna(vin):
+                                    vin = ""
+
+                                price = float(row.get("price", row.get("Цена_продажи", row.get("Цена", 0))))
+                                if pd.isna(price):
+                                    price = 0
+
+                                cost = float(row.get("cost", row.get("Закупочная_стоимость", row.get("Стоимость", 0))))
+                                if pd.isna(cost):
+                                    cost = 0
+
+                                expenses = float(row.get("expenses", row.get("Расходы", 0)))
+                                if pd.isna(expenses):
+                                    expenses = 0
+
+                                profit = float(
+                                    row.get("profit", row.get("Прибыль", row.get("header", price - cost - expenses))))
+                                if pd.isna(profit):
+                                    profit = price - cost - expenses
+
+                                comment = str(row.get("comment", row.get("Комментарий", "")))
+                                if pd.isna(comment):
+                                    comment = ""
+
+                                car_deal = {
+                                    "brand": brand,
+                                    "year": year,
+                                    "vin": vin,
+                                    "price": price,
+                                    "cost": cost,
+                                    "expenses": expenses,
+                                    "header": profit,
+                                    "comment": comment
+                                }
+
+                                print(f"Создана авто-сделка: {car_deal}")
+
+                                if not self.db.exists_car_deal(car_deal):
+                                    self.db.add_car_deal(car_deal)
+                                    imported_count['car_deals'] += 1
+                                    print(f"Авто-сделка добавлена: {imported_count['car_deals']}")
+                                else:
+                                    print("Авто-сделка уже существует, пропускаем")
+
+                            except Exception as e:
+                                print(f"Ошибка при импорте авто-сделки в строке {index}: {e}")
+                                import traceback
+                                traceback.print_exc()
+
+                # Импорт настроек
+                settings_sheets = ['Настройки', 'Settings']
+                for sheet_name in settings_sheets:
+                    if sheet_name in sheet_names:
+                        df = pd.read_excel(xls, sheet_name=sheet_name)
+                        capital_columns = ['initial_capital', 'Стартовый_капитал']
+
+                        for col in capital_columns:
+                            if col in df.columns:
+                                try:
+                                    capital_value = df.iloc[0][col]
+                                    if not pd.isna(capital_value):
+                                        capital = float(capital_value)
+                                        self.db.update_initial_capital(capital)
+                                        self.initial_capital = capital
+                                        print(f"Установлен стартовый капитал: {capital}")
+                                        break
+                                except Exception as e:
+                                    print(f"Ошибка при импорте настроек: {e}")
 
             # Обновляем данные из базы
             self.transactions = self.db.get_all_transactions()
@@ -1188,25 +1589,48 @@ class MoneyTrackerApp:
             self.capital_entry.delete(0, tk.END)
             self.capital_entry.insert(0, str(self.initial_capital))
 
-            # Полностью обновляем отчёт
+            # Полностью обновляем отчёты
             self.update_report()
+            self.update_monthly_report()
 
-            messagebox.showinfo("Успех", "Данные успешно импортированы из Excel.")
+            messagebox.showinfo(
+                "Успех",
+                f"Импорт завершен!\n\n"
+                f"Добавлено:\n"
+                f"• Транзакций: {imported_count['transactions']}\n"
+                f"• Авто-сделок: {imported_count['car_deals']}\n"
+                f"• Стартовый капитал: {self.initial_capital:,.2f} ₽"
+            )
+
         except Exception as e:
+            print(f"Общая ошибка импорта: {e}")
+            import traceback
+            traceback.print_exc()
             messagebox.showerror("Ошибка", f"Ошибка при импорте: {str(e)}")
 
     def export_to_excel(self):
         path = filedialog.asksaveasfilename(
             defaultextension=".xlsx",
             filetypes=[("Excel files", "*.xlsx")],
-            title="Сохранить отчет как"
+            title="Сохранить полный отчет"
         )
         if not path:
             return
 
         try:
-            if self.db.export_to_excel(path):
-                messagebox.showinfo("Успех", "Данные успешно экспортированы в Excel.")
+            # Получаем данные месячного отчета
+            monthly_data = self.get_monthly_report_data()
+
+            if self.db.export_to_excel(path, monthly_data):
+                sheets = ["Транзакции", "Авто-сделки", "Настройки"]
+                if monthly_data:
+                    sheets.extend(["Месяц_Ежедневно", "Месяц_Операции", "Месяц_Категории", "Месяц_Инфо"])
+
+                messagebox.showinfo(
+                    "Успех",
+                    f"Полный отчет успешно экспортирован в Excel!\n\n"
+                    f"Включены листы:\n" + "\n".join(sheets)
+                )
             else:
                 messagebox.showerror("Ошибка", "Не удалось экспортировать данные")
         except Exception as e:
