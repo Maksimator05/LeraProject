@@ -2,7 +2,6 @@ import tkinter as tk
 import customtkinter as ctk
 from tkinter import ttk, messagebox, filedialog
 from datetime import datetime
-from calendar import monthrange
 
 # Настройка тем - принудительно темная
 ctk.set_appearance_mode("Dark")
@@ -103,12 +102,18 @@ class DatabaseManager:
     def update_transaction(self, transaction_id: int, updates: Dict) -> bool:
         if not updates:
             return False
-        cursor = self.conn.cursor()
-        set_clause = ", ".join(f"{key} = ?" for key in updates.keys())
-        values = list(updates.values()) + [transaction_id]
-        cursor.execute(f"UPDATE transactions SET {set_clause} WHERE id = ?", values)
-        self.conn.commit()
-        return cursor.rowcount > 0
+        try:
+            cursor = self.conn.cursor()
+            set_clause = ", ".join(f"{key} = ?" for key in updates.keys())
+            values = list(updates.values()) + [transaction_id]
+            cursor.execute(f"UPDATE transactions SET {set_clause} WHERE id = ?", values)
+            self.conn.commit()
+            print(f"UPDATE transactions: {set_clause} WHERE id = {transaction_id}")
+            print(f"Values: {values}")
+            return cursor.rowcount > 0
+        except Exception as e:
+            print(f"Ошибка при обновлении транзакции: {e}")
+            return False
 
     def exists_transaction(self, transaction: Dict) -> bool:
         cursor = self.conn.cursor()
@@ -158,12 +163,18 @@ class DatabaseManager:
     def update_car_deal(self, deal_id: int, updates: Dict) -> bool:
         if not updates:
             return False
-        cursor = self.conn.cursor()
-        set_clause = ", ".join(f"{key} = ?" for key in updates.keys())
-        values = list(updates.values()) + [deal_id]
-        cursor.execute(f"UPDATE car_deals SET {set_clause} WHERE id = ?", values)
-        self.conn.commit()
-        return cursor.rowcount > 0
+        try:
+            cursor = self.conn.cursor()
+            set_clause = ", ".join(f"{key} = ?" for key in updates.keys())
+            values = list(updates.values()) + [deal_id]
+            cursor.execute(f"UPDATE car_deals SET {set_clause} WHERE id = ?", values)
+            self.conn.commit()
+            print(f"UPDATE car_deals: {set_clause} WHERE id = {deal_id}")
+            print(f"Values: {values}")
+            return cursor.rowcount > 0
+        except Exception as e:
+            print(f"Ошибка при обновлении авто-сделки: {e}")
+            return False
 
     def exists_car_deal(self, car_deal: Dict) -> bool:
         cursor = self.conn.cursor()
@@ -469,25 +480,26 @@ class MoneyTrackerApp:
         self.notebook = ttk.Notebook(self.main_frame)
         self.notebook.pack(fill="both", expand=True)
 
+        # Сначала создаем все фреймы
         self.add_frame = ctk.CTkFrame(self.notebook)
-        self.notebook.add(self.add_frame, text="➕ Добавить операцию")
-        self.setup_add_frame()
-
         self.car_frame = ctk.CTkFrame(self.notebook)
-        self.notebook.add(self.car_frame, text="🚗 Авто-сделки")
-        self.setup_car_frame()
-
         self.report_frame = ctk.CTkFrame(self.notebook)
-        self.notebook.add(self.report_frame, text="📊 Финансовый отчет")
-        self.setup_report_frame()
-
         self.monthly_frame = ctk.CTkFrame(self.notebook)
-        self.notebook.add(self.monthly_frame, text="📅 Расходы за месяц")
-        self.setup_monthly_frame()
-
         self.settings_frame = ctk.CTkFrame(self.notebook)
-        self.notebook.add(self.settings_frame, text="⚙️ Настройки")
+
+        # Затем настраиваем их (теперь monthly_frame будет создан до report_frame)
+        self.setup_add_frame()
+        self.setup_car_frame()
+        self.setup_monthly_frame()  # Сначала создаем monthly_frame
+        self.setup_report_frame()  # Затем report_frame
         self.setup_settings_frame()
+
+        # Добавляем вкладки после настройки
+        self.notebook.add(self.add_frame, text="➕ Добавить операцию")
+        self.notebook.add(self.car_frame, text="🚗 Авто-сделки")
+        self.notebook.add(self.report_frame, text="📊 Финансовый отчет")
+        self.notebook.add(self.monthly_frame, text="📅 Расходы за месяц")
+        self.notebook.add(self.settings_frame, text="⚙️ Настройки")
 
         self.setup_context_menus()
 
@@ -1008,18 +1020,26 @@ class MoneyTrackerApp:
             except (ValueError, IndexError):
                 continue
 
-
-    # Добавляем метод для обновления данных при изменении транзакций
     def refresh_data(self):
         """Обновляет все данные из базы и перерисовывает отчеты"""
-        # Загружаем свежие данные из базы
-        self.transactions = self.db.get_all_transactions()
-        self.car_deals = self.db.get_all_car_deals()
-        self.initial_capital = self.db.get_initial_capital()
+        try:
+            # Загружаем свежие данные из базы
+            self.transactions = self.db.get_all_transactions()
+            self.car_deals = self.db.get_all_car_deals()
+            self.initial_capital = self.db.get_initial_capital()
 
-        # Обновляем все отчеты
-        self.update_report()
-        self.update_monthly_report()
+            # Обновляем все отчеты
+            self.update_report()
+            if hasattr(self, 'daily_tree'):
+                self.update_monthly_report()
+
+            # Обновляем поле капитала в настройках
+            if hasattr(self, 'capital_entry'):
+                self.capital_entry.delete(0, tk.END)
+                self.capital_entry.insert(0, str(self.initial_capital))
+
+        except Exception as e:
+            print(f"Ошибка при обновлении данных: {e}")
 
     def get_month_number(self, month_name):
         months = {
@@ -1114,23 +1134,12 @@ class MoneyTrackerApp:
         key_order = ["date", "type", "amount", "description", "category", "payment_type"]
         car_key_order = ["brand", "year", "vin", "price", "cost", "expenses", "header", "comment"]
 
-        self.tree.bind(
-            "<Double-1>",
-            lambda event: self._handle_treeview_double_click(
-                event,
-                self.tree,
-                lambda tree, item, col: self.edit_cell(tree, item, col, self.transactions, key_order)
-            )
-        )
+        # Исправляем привязку событий
+        self.tree.bind("<Double-1>",
+                       lambda event: self.on_tree_double_click(event, self.tree, self.transactions, key_order))
+        self.car_tree.bind("<Double-1>",
+                           lambda event: self.on_tree_double_click(event, self.car_tree, self.car_deals, car_key_order))
 
-        self.car_tree.bind(
-            "<Double-1>",
-            lambda event: self._handle_treeview_double_click(
-                event,
-                self.car_tree,
-                lambda tree, item, col: self.edit_cell(tree, item, col, self.car_deals, car_key_order)
-            )
-        )
 
     def setup_settings_frame(self):
         ctk.CTkLabel(self.settings_frame, text="Стартовый капитал:", font=self.large_font).pack(pady=(20, 5))
@@ -1148,8 +1157,20 @@ class MoneyTrackerApp:
                 messagebox.showerror("Ошибка", "Введите число.")
 
         ctk.CTkButton(self.settings_frame, text="💾 Сохранить капитал", command=save_capital).pack(pady=10)
-        ctk.CTkButton(self.settings_frame, text="📥 Импорт из Excel", command=self.import_from_excel).pack(pady=10)
+        ctk.CTkButton(self.settings_frame, text="📥 Импорт из Excel", command=self.import_from_excel).pack(
+            pady=10)  # ← ЭТО правильный вызов
         ctk.CTkButton(self.settings_frame, text="📤 Экспорт в Excel", command=self.export_to_excel).pack(pady=10)
+
+    def on_tree_double_click(self, event, tree, data_list, key_order):
+        """Обработчик двойного клика по дереву"""
+        item = tree.identify_row(event.y)
+        column = tree.identify_column(event.x)
+
+        if not item or not column:
+            return
+
+        col_index = int(column[1:]) - 1
+        self.edit_cell(tree, item, col_index, data_list, key_order)
 
 
     def get_data_list_by_iid(self, iid):
@@ -1161,110 +1182,137 @@ class MoneyTrackerApp:
             return None
 
     def edit_cell(self, tree, item, col_index, data_list, key_order):
-        x, y, width, height = tree.bbox(item, f"#{col_index + 1}")
-        value = tree.item(item, "values")[col_index]
-
-        entry = ctk.CTkEntry(tree, width=width, height=height)
-        entry.insert(0, value)
-        entry.place(x=x, y=y)
-
-        def save_edit(event=None):
-            new_val = entry.get()
-            values = list(tree.item(item, "values"))
-            values[col_index] = new_val
-            tree.item(item, values=values)
-            entry.destroy()
-
-            iid = tree.item(item, "text") if tree == self.tree else item
-            data_list = self.get_data_list_by_iid(iid)
-            if data_list is None:
+        try:
+            x, y, width, height = tree.bbox(item, f"#{col_index + 1}")
+            if not all([x, y, width, height]):
                 return
 
-            # Исправлено: правильное получение индекса
-            if iid.startswith("tr_"):
-                index = int(iid.split("_")[1])
-            elif iid.startswith("car_"):
-                index = int(iid.split("_")[1])
-            else:
+            value = tree.item(item, "values")[col_index]
+
+            entry = ctk.CTkEntry(tree, width=width, height=height)
+            entry.insert(0, str(value))
+            entry.place(x=x, y=y)
+
+            def save_edit(event=None):
                 try:
-                    index = int(iid)
-                except ValueError:
-                    return
+                    new_val = entry.get()
+                    values = list(tree.item(item, "values"))
+                    values[col_index] = new_val
+                    tree.item(item, values=values)
+                    entry.destroy()
 
-            if index < len(data_list) and col_index < len(key_order):
-                key = key_order[col_index]
-                cleaned = new_val.replace(",", "")
-                try:
-                    if key in ["amount", "price", "cost", "header", "expenses"]:
-                        cleaned = float(cleaned)
-                except ValueError:
-                    pass
+                    # Получаем iid элемента
+                    iid = tree.item(item, "text")
 
-                data_list[index][key] = cleaned
+                    if not iid:
+                        return
 
-            # Обновление транзакции
-            if iid.startswith("tr_"):
-                updates = {key_order[col_index]: cleaned}
-                self.db.update_transaction(data_list[index]["id"], updates)
+                    # Определяем тип данных (транзакции или авто-сделки)
+                    if iid.startswith("tr_"):
+                        index = int(iid.split("_")[1])
+                        data_type = "transaction"
+                    elif iid.startswith("car_"):
+                        index = int(iid.split("_")[1])
+                        data_type = "car_deal"
+                    else:
+                        return
 
-            # Обновление авто-сделки
-            elif iid.startswith("car_"):
-                updates = {}
-                if key == "price":
-                    # При изменении цены пересчитываем прибыль
-                    price = float(cleaned)
-                    cost = float(data_list[index].get("cost", 0))
-                    expenses = float(data_list[index].get("expenses", 0))
-                    header = price - cost - expenses
-                    updates = {
-                        "price": price,
-                        "header": header
-                    }
-                elif key == "cost":
-                    # При изменении стоимости пересчитываем прибыль
-                    cost = float(cleaned)
-                    price = float(data_list[index].get("price", 0))
-                    expenses = float(data_list[index].get("expenses", 0))
-                    header = price - cost - expenses
-                    updates = {
-                        "cost": cost,
-                        "header": header
-                    }
-                elif key == "expenses":
-                    # При изменении расходов пересчитываем прибыль
-                    expenses = float(cleaned)
-                    price = float(data_list[index].get("price", 0))
-                    cost = float(data_list[index].get("cost", 0))
-                    header = price - cost - expenses
-                    updates = {
-                        "expenses": expenses,
-                        "header": header
-                    }
-                else:
-                    updates = {key: cleaned}
+                    if index < len(data_list) and col_index < len(key_order):
+                        key = key_order[col_index]
+                        cleaned = new_val.replace(",", "").replace(" ", "").strip()
 
-                # Обновляем данные в списке
-                data_list[index].update(updates)
+                        try:
+                            # Преобразуем числовые поля
+                            if key in ["amount", "price", "cost", "header", "expenses"]:
+                                cleaned = float(cleaned)
+                        except ValueError:
+                            # Если не число, оставляем как строку
+                            pass
 
-                # Обновляем в базе данных
-                self.db.update_car_deal(data_list[index]["id"], updates)
+                        # Сохраняем изменения в базе данных
+                        if data_type == "transaction":
+                            transaction_id = data_list[index]["id"]
+                            updates = {key: cleaned}
 
-                # Полностью обновляем таблицу
-                self.update_report()
+                            # Особенная обработка для суммы
+                            if key == "amount":
+                                current_type = data_list[index]["type"]
+                                if current_type == "Расход":
+                                    updates["amount"] = -abs(float(cleaned))
+                                else:
+                                    updates["amount"] = abs(float(cleaned))
 
-            self.update_report()
+                            # Обновляем в базе данных
+                            success = self.db.update_transaction(transaction_id, updates)
+                            if success:
+                                print(f"Транзакция {transaction_id} обновлена: {updates}")
 
-        entry.bind("<Return>", save_edit)
-        entry.bind("<FocusOut>", save_edit)
-        entry.focus_set()
+                        elif data_type == "car_deal":
+                            deal_id = data_list[index]["id"]
+                            updates = {}
+
+                            # Особенная обработка для авто-сделок
+                            if key == "price":
+                                price = float(cleaned)
+                                cost = float(data_list[index].get("cost", 0))
+                                expenses = float(data_list[index].get("expenses", 0))
+                                header = price - cost - expenses
+                                updates = {"price": price, "header": header}
+
+                            elif key == "cost":
+                                cost = float(cleaned)
+                                price = float(data_list[index].get("price", 0))
+                                expenses = float(data_list[index].get("expenses", 0))
+                                header = price - cost - expenses
+                                updates = {"cost": cost, "header": header}
+
+                            elif key == "expenses":
+                                expenses = float(cleaned)
+                                price = float(data_list[index].get("price", 0))
+                                cost = float(data_list[index].get("cost", 0))
+                                header = price - cost - expenses
+                                updates = {"expenses": expenses, "header": header}
+
+                            else:
+                                updates = {key: cleaned}
+
+                            # Обновляем в базе данных
+                            success = self.db.update_car_deal(deal_id, updates)
+                            if success:
+                                print(f"Авто-сделка {deal_id} обновлена: {updates}")
+
+                    # Полностью перезагружаем все данные из базы
+                    self.refresh_data()
+
+                except Exception as e:
+                    print(f"Ошибка при сохранении редактирования: {e}")
+                    entry.destroy()
+
+            entry.bind("<Return>", save_edit)
+            entry.bind("<FocusOut>", save_edit)
+            entry.focus_set()
+
+        except Exception as e:
+            print(f"Ошибка при редактировании ячейки: {e}")
 
     def _handle_treeview_double_click(self, event, tree, edit_callback):
         item = tree.identify_row(event.y)
         column = tree.identify_column(event.x)
         if not item or not column:
             return
+
+        # Получаем правильный iid
+        iid = tree.item(item, "text") if hasattr(tree.item(item), "text") else item
+
         col_index = int(column[1:]) - 1
-        edit_callback(tree, item, col_index)
+
+        # Определяем тип данных для редактирования
+        if iid.startswith("tr_"):
+            edit_callback(tree, item, col_index, self.transactions,
+                          ["date", "type", "amount", "description", "category", "payment_type"])
+        elif iid.startswith("car_"):
+            edit_callback(tree, item, col_index, self.car_deals,
+                          ["brand", "year", "vin", "price", "cost", "expenses", "header", "comment"])
 
     def add_transaction(self):
         try:
@@ -1342,29 +1390,37 @@ class MoneyTrackerApp:
             messagebox.showerror("Ошибка", f"Ошибка при добавлении: {str(e)}")
 
     def update_report(self):
+        # Очищаем таблицы
         for item in self.tree.get_children():
             self.tree.delete(item)
         for item in self.car_tree.get_children():
             self.car_tree.delete(item)
 
+        # Заполняем таблицу транзакций
         for i, tr in enumerate(self.transactions):
+            item_id = f"tr_{i}"
             self.tree.insert(
                 "",
                 "end",
-                iid=f"tr_{i}",
+                iid=item_id,
+                text=item_id,  # Важно: устанавливаем text такой же как iid
                 values=(
                     tr["date"],
                     tr["type"],
                     f"{abs(tr['amount']):,.2f}",
                     tr["description"],
                     tr["category"],
-                    tr.get("payment_type", "Наличные")  # Добавляем тип оплаты
+                    tr.get("payment_type", "Наличные")
                 )
             )
 
+        # Заполняем таблицу авто-сделок
         for i, deal in enumerate(self.car_deals):
+            item_id = f"car_{i}"
             self.car_tree.insert(
-                "", "end", iid=f"car_{i}",
+                "", "end",
+                iid=item_id,
+                text=item_id,  # Важно: устанавливаем text такой же как iid
                 values=(
                     deal.get("brand", ""),
                     deal.get("year", ""),
@@ -1389,6 +1445,7 @@ class MoneyTrackerApp:
             if t["category"] not in excluded_categories
         ]
 
+        # ВАЖНО: используем abs() для суммы, но сохраняем знак для расчета
         total_income = sum(t["amount"] for t in filtered_transactions if t["type"] == "Приход")
         total_expense = abs(sum(t["amount"] for t in filtered_transactions if t["type"] == "Расход"))
 
