@@ -26,7 +26,6 @@ class Toast(ctk.CTkToplevel):
             self,
             text=message,
             corner_radius=10,
-            fg_color=("#DDDDDD", "#2B2B2B"),  # Светлый/Темный режим
             text_color=("#000000", "#FFFFFF"),
             font=("Arial", 14, "bold"),
             padx=20,
