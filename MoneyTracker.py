@@ -11,6 +11,80 @@ import sqlite3
 import pandas as pd
 from typing import List, Dict
 
+class Toast(ctk.CTkToplevel):
+    def __init__(self, parent, message, duration=2500):
+        super().__init__(parent)
+        self.duration = duration
+
+        # Настраиваем окно
+        self.overrideredirect(True) # Убираем заголовок
+        self.attributes("-alpha", 0.0) # Полупрозрачность
+        self.attributes("-topmost", True) # Поверх всех окон
+
+        # Создаем сообщение
+        self.label = ctk.CTkLabel(
+            self,
+            text=message,
+            corner_radius=10,
+            fg_color=("#DDDDDD", "#2B2B2B"),  # Светлый/Темный режим
+            text_color=("#000000", "#FFFFFF"),
+            font=("Arial", 14, "bold"),
+            padx=20,
+            pady=10
+        )
+        self.label.pack()
+
+        # Вычисляем позицию (центр снизу)
+        self.update_idletasks()
+        parent_width = parent.winfo_width()
+        parent_height = parent.winfo_height()
+        toast_width = self.winfo_width()
+        x = parent.winfo_rootx() + (parent_width - toast_width) // 2
+        y = parent.winfo_rooty() + parent_height - 100  # 100px от нижнего края
+
+        self.geometry(f"+{x}+{y}")
+
+        # Анимация появления
+        self.fade_in()
+
+        # Планируем закрытие
+        self.after(self.duration, self.fade_out)
+
+    def fade_in(self):
+        """Плавное появление"""
+        current_alpha = self.attributes("-alpha")
+        if current_alpha < 0.9:
+            self.attributes("-alpha", current_alpha + 0.1)
+            self.after(20, self.fade_in)
+        else:
+            self.attributes("-alpha", 0.9)
+
+    def fade_out(self):
+        """Плавное исчезновение"""
+        current_alpha = self.attributes("-alpha")
+        if current_alpha > 0:
+            self.attributes("-alpha", current_alpha - 0.1)
+            self.after(20, self.fade_out)
+        else:
+            self.destroy()
+
+    def show_toast(self, message, duration=2500, toast_type="info"):
+        """Показывает временное уведомление в центре снизу с разными цветами"""
+        colors = {
+            "info": ("#DDDDDD", "#2B2B2B"),  # Серый - информация
+            "success": ("#DFF2BF", "#4F8A10"),  # Зеленый - успех
+            "error": ("#FFBABA", "#D8000C"),  # Красный - ошибка
+            "warning": ("#FEEFB3", "#9F6000")  # Желтый - предупреждение
+        }
+
+        fg_color, text_color = colors.get(toast_type, ("#DDDDDD", "#2B2B2B"))
+
+        self.root.update_idletasks()
+        toast = Toast(self.root, message, duration)
+        # Настраиваем цвет
+        toast.label.configure(fg_color=fg_color, text_color=text_color)
+
+
 
 class DatabaseManager:
     def __init__(self, db_file="money_tracker.db"):
@@ -453,6 +527,56 @@ class MoneyTrackerApp:
         self.initial_capital = self.db.get_initial_capital()
 
         self.setup_ui()
+
+    def ask_confirmation(self, title, message):
+        """Стильное окно подтверждения вместо стандартного messagebox"""
+        dialog = ctk.CTkToplevel(self.root)
+        dialog.title(title)
+        dialog.geometry("400x200")
+        dialog.attributes("-topmost", True)
+        dialog.grab_set()  # Блокирует главное окно
+
+        # Центрируем диалог
+        dialog.transient(self.root)
+        dialog.update_idletasks()
+        x = self.root.winfo_x() + (self.root.winfo_width() - dialog.winfo_width()) // 2
+        y = self.root.winfo_y() + (self.root.winfo_height() - dialog.winfo_height()) // 2
+        dialog.geometry(f"+{x}+{y}")
+
+        # Содержимое диалога
+        ctk.CTkLabel(dialog, text=message, font=self.large_font,
+                     wraplength=350).pack(pady=20, padx=20)
+
+        result = [False]  # Используем список для передачи по ссылке
+
+        def on_yes():
+            result[0] = True
+            dialog.destroy()
+
+        def on_no():
+            result[0] = False
+            dialog.destroy()
+
+        # Фрейм для кнопок
+        button_frame = ctk.CTkFrame(dialog, fg_color="transparent")
+        button_frame.pack(pady=10)
+
+        ctk.CTkButton(button_frame, text="✅ Да", command=on_yes,
+                      fg_color="#4CAF50", hover_color="#45a049",
+                      width=100).pack(side="left", padx=10)
+        ctk.CTkButton(button_frame, text="❌ Нет", command=on_no,
+                      fg_color="#f44336", hover_color="#da190b",
+                      width=100).pack(side="right", padx=10)
+
+        # Ждем закрытия диалога
+        self.root.wait_window(dialog)
+        return result[0]
+
+
+    def show_toast(self, message, duration=2500):
+        """Показывает временное уведомление в правом нижнем углу"""
+        toast = Toast(self.root, message, duration)
+
 
     def setup_ui(self):
         self.main_frame = ctk.CTkFrame(self.root)
@@ -1151,7 +1275,7 @@ class MoneyTrackerApp:
             try:
                 self.initial_capital = float(self.capital_entry.get())
                 self.db.update_initial_capital(self.initial_capital)
-                messagebox.showinfo("Сохранено", "Стартовый капитал обновлён.")
+                self.show_toast("💾 Капитал обновлен")
                 self.update_report()
             except ValueError:
                 messagebox.showerror("Ошибка", "Введите число.")
@@ -1347,7 +1471,7 @@ class MoneyTrackerApp:
             self.entries["Сумма:"].insert(0, "0.00")
             self.entries["Описание:"].delete(0, tk.END)
 
-            messagebox.showinfo("Успех", "Операция успешно добавлена!")
+            self.show_toast("✅ Операция добавлена")
 
         except ValueError:
             messagebox.showerror("Ошибка", "Введите корректную сумму!")
@@ -1384,7 +1508,7 @@ class MoneyTrackerApp:
             # Обновляем данные и все отчеты
             self.refresh_data()
 
-            messagebox.showinfo("Успех", "Авто-сделка успешно добавлена!")
+            self.show_toast("🚗 Авто-сделка добавлена")
 
         except Exception as e:
             messagebox.showerror("Ошибка", f"Ошибка при добавлении: {str(e)}")
@@ -1650,20 +1774,20 @@ class MoneyTrackerApp:
             self.update_report()
             self.update_monthly_report()
 
-            messagebox.showinfo(
-                "Успех",
-                f"Импорт завершен!\n\n"
-                f"Добавлено:\n"
-                f"• Транзакций: {imported_count['transactions']}\n"
-                f"• Авто-сделок: {imported_count['car_deals']}\n"
-                f"• Стартовый капитал: {self.initial_capital:,.2f} ₽"
-            )
+            # Формируем многострочное сообщение для тоста
+            message_lines = [
+                "📥 Импорт завершен",
+                f"Транзакций: +{imported_count['transactions']}",
+                f"Авто-сделок: +{imported_count['car_deals']}",
+                f"Капитал: {self.initial_capital:,.2f}₽"
+            ]
+            self.show_toast("\n".join(message_lines), 4000)  # Показываем чуть дольше
 
         except Exception as e:
             print(f"Общая ошибка импорта: {e}")
             import traceback
             traceback.print_exc()
-            messagebox.showerror("Ошибка", f"Ошибка при импорте: {str(e)}")
+            self.show_toast(f"❌ Ошибка импорта: {str(e)}", toast_type="error")
 
     def export_to_excel(self):
         path = filedialog.asksaveasfilename(
@@ -1683,15 +1807,11 @@ class MoneyTrackerApp:
                 if monthly_data:
                     sheets.extend(["Месяц_Ежедневно", "Месяц_Операции", "Месяц_Категории", "Месяц_Инфо"])
 
-                messagebox.showinfo(
-                    "Успех",
-                    f"Полный отчет успешно экспортирован в Excel!\n\n"
-                    f"Включены листы:\n" + "\n".join(sheets)
-                )
+                self.show_toast("📊 Полный отчет экспортирован в Excel", 3500)
             else:
                 messagebox.showerror("Ошибка", "Не удалось экспортировать данные")
         except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка при экспорте: {str(e)}")
+            self.show_toast(f"❌ Ошибка экспорта: {str(e)}", toast_type="error")
 
     def setup_context_menus(self):
         # Контекстное меню для таблицы транзакций
@@ -1727,7 +1847,7 @@ class MoneyTrackerApp:
         if not item.startswith("tr_"):
             return
 
-        if not messagebox.askyesno("Подтверждение", "Вы уверены, что хотите удалить эту транзакцию?"):
+        if not self.ask_confirmation("Подтверждение", "Вы уверены, что хотите удалить эту транзакцию?"):
             return
 
         index = int(item.split("_")[1])
@@ -1741,7 +1861,7 @@ class MoneyTrackerApp:
         # Обновляем данные и все отчеты
         self.refresh_data()
 
-        messagebox.showinfo("Успех", "Транзакция успешно удалена")
+        self.show_toast("🗑️ Транзакция удалена")
 
     def delete_selected_car_deal(self):
         selected_item = self.car_tree.selection()
@@ -1752,7 +1872,7 @@ class MoneyTrackerApp:
         if not item.startswith("car_"):
             return
 
-        if not messagebox.askyesno("Подтверждение", "Вы уверены, что хотите удалить эту авто-сделку?"):
+        if not self.ask_confirmation("Подтверждение", "Вы уверены, что хотите удалить эту авто-сделку?"):
             return
 
         index = int(item.split("_")[1])
@@ -1766,7 +1886,7 @@ class MoneyTrackerApp:
         # Обновляем данные и все отчеты
         self.refresh_data()
 
-        messagebox.showinfo("Успех", "Авто-сделка успешно удалена")
+        self.show_toast("🚗 Авто-сделка удалена")
 
 if __name__ == "__main__":
     root = ctk.CTk()
