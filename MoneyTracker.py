@@ -84,7 +84,6 @@ class Toast(ctk.CTkToplevel):
         toast.label.configure(fg_color=fg_color, text_color=text_color)
 
 
-
 class DatabaseManager:
     def __init__(self, db_file="money_tracker.db"):
         self.db_name = db_file
@@ -95,7 +94,7 @@ class DatabaseManager:
     def create_tables(self):
         cursor = self.conn.cursor()
 
-        # Создаем таблицу транзакций (без удаления существующей)
+        # Создаем таблицу транзакций (с полем exclude_from_total)
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,16 +103,17 @@ class DatabaseManager:
                 amount REAL NOT NULL,
                 description TEXT NOT NULL,
                 category TEXT NOT NULL,
-                payment_type TEXT NOT NULL DEFAULT 'Наличные'
+                payment_type TEXT NOT NULL DEFAULT 'Наличные',
+                exclude_from_total INTEGER DEFAULT 0
             )
         """)
 
-        # Проверяем наличие столбца payment_type и добавляем его, если нужно
+        # Проверяем наличие столбца exclude_from_total и добавляем его, если нужно
         try:
             cursor.execute("PRAGMA table_info(transactions)")
             columns = [column[1] for column in cursor.fetchall()]
-            if 'payment_type' not in columns:
-                cursor.execute("ALTER TABLE transactions ADD COLUMN payment_type TEXT NOT NULL DEFAULT 'Наличные'")
+            if 'exclude_from_total' not in columns:
+                cursor.execute("ALTER TABLE transactions ADD COLUMN exclude_from_total INTEGER DEFAULT 0")
         except sqlite3.Error as e:
             print(f"Ошибка при проверке столбцов: {e}")
 
@@ -151,26 +151,41 @@ class DatabaseManager:
         self.conn.commit()
 
     # ---------------- Транзакции ----------------
-    def add_transaction(self, transaction: Dict) -> int:
+    def add_transaction(self, transaction):
         cursor = self.conn.cursor()
-        cursor.execute("""
-            INSERT INTO transactions (date, type, amount, description, category, payment_type)
-            VALUES (?, ?, ?, ?, ?, ?)
-        """, (
-            transaction["date"],
-            transaction["type"],
-            transaction["amount"],
-            transaction["description"],
-            transaction["category"],
-            transaction.get("payment_type", "Наличные")
+        cursor.execute('''
+            INSERT INTO transactions (date, type, amount, description, category, payment_type, exclude_from_total)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (
+            transaction['date'],
+            transaction['type'],
+            transaction['amount'],
+            transaction['description'],
+            transaction['category'],
+            transaction.get('payment_type', 'Наличные'),
+            int(transaction.get('exclude_from_total', False))
         ))
         self.conn.commit()
-        return cursor.lastrowid
 
-    def get_all_transactions(self) -> List[Dict]:
+    def get_all_transactions(self):
         cursor = self.conn.cursor()
-        cursor.execute("SELECT * FROM transactions ORDER BY date DESC")
-        return [dict(row) for row in cursor.fetchall()]
+        cursor.execute('''
+            SELECT id, date, type, amount, description, category, payment_type, exclude_from_total 
+            FROM transactions ORDER BY date DESC
+        ''')
+        transactions = []
+        for row in cursor.fetchall():
+            transactions.append({
+                'id': row[0],
+                'date': row[1],
+                'type': row[2],
+                'amount': row[3],
+                'description': row[4],
+                'category': row[5],
+                'payment_type': row[6],
+                'exclude_from_total': bool(row[7])
+            })
+        return transactions
 
     def update_transaction(self, transaction_id: int, updates: Dict) -> bool:
         if not updates:
@@ -181,8 +196,6 @@ class DatabaseManager:
             values = list(updates.values()) + [transaction_id]
             cursor.execute(f"UPDATE transactions SET {set_clause} WHERE id = ?", values)
             self.conn.commit()
-            print(f"UPDATE transactions: {set_clause} WHERE id = {transaction_id}")
-            print(f"Values: {values}")
             return cursor.rowcount > 0
         except Exception as e:
             print(f"Ошибка при обновлении транзакции: {e}")
@@ -190,8 +203,6 @@ class DatabaseManager:
 
     def exists_transaction(self, transaction: Dict) -> bool:
         cursor = self.conn.cursor()
-
-        # Более гибкая проверка: ищем похожие транзакции (без точного совпадения даты)
         cursor.execute("""
             SELECT COUNT(*) FROM transactions
             WHERE type = ? AND amount = ? AND description = ? 
@@ -203,9 +214,8 @@ class DatabaseManager:
             transaction["description"],
             transaction["category"],
             transaction.get("payment_type", "Наличные"),
-            f"%{transaction['date'].split()[0]}%"  # Ищем по дате (без времени)
+            f"%{transaction['date'].split()[0]}%"
         ))
-
         return cursor.fetchone()[0] > 0
 
     # ---------------- Авто-сделки ----------------
@@ -242,8 +252,6 @@ class DatabaseManager:
             values = list(updates.values()) + [deal_id]
             cursor.execute(f"UPDATE car_deals SET {set_clause} WHERE id = ?", values)
             self.conn.commit()
-            print(f"UPDATE car_deals: {set_clause} WHERE id = {deal_id}")
-            print(f"Values: {values}")
             return cursor.rowcount > 0
         except Exception as e:
             print(f"Ошибка при обновлении авто-сделки: {e}")
@@ -251,8 +259,6 @@ class DatabaseManager:
 
     def exists_car_deal(self, car_deal: Dict) -> bool:
         cursor = self.conn.cursor()
-
-        # Более гибкая проверка: не требуем точного совпадения всех полей
         cursor.execute("""
             SELECT COUNT(*) FROM car_deals
             WHERE brand = ? AND year = ? AND vin = ?
@@ -264,7 +270,6 @@ class DatabaseManager:
             car_deal.get("price", 0),
             car_deal.get("cost", 0)
         ))
-
         return cursor.fetchone()[0] > 0
 
     # ---------------- Настройки ----------------
@@ -288,224 +293,54 @@ class DatabaseManager:
                 transactions = self.get_all_transactions()
                 if transactions:
                     df_transactions = pd.DataFrame(transactions)
-                    # Переименовываем колонки для удобства
                     df_transactions = df_transactions.rename(columns={
-                        "date": "Дата",
-                        "type": "Тип",
-                        "amount": "Сумма",
-                        "description": "Описание",
-                        "category": "Категория",
-                        "payment_type": "Тип_оплаты"
+                        "date": "Дата", "type": "Тип", "amount": "Сумма",
+                        "description": "Описание", "category": "Категория",
+                        "payment_type": "Тип_оплаты", "exclude_from_total": "Исключено_из_расхода"
                     })
-                    df_transactions.to_excel(
-                        writer,
-                        sheet_name="Транзакции",
-                        index=False,
-                        columns=["Дата", "Тип", "Сумма", "Описание", "Категория", "Тип_оплаты"]
-                    )
+                    df_transactions.to_excel(writer, sheet_name="Транзакции", index=False)
 
                 # Экспорт авто-сделок
                 car_deals = self.get_all_car_deals()
                 if car_deals:
                     df_car_deals = pd.DataFrame(car_deals)
                     df_car_deals = df_car_deals.rename(columns={
-                        "brand": "Марка",
-                        "year": "Год",
-                        "vin": "VIN",
-                        "price": "Цена_продажи",
-                        "cost": "Закупочная_стоимость",
-                        "expenses": "Расходы",
-                        "header": "Прибыль",
-                        "comment": "Комментарий"
+                        "brand": "Марка", "year": "Год", "vin": "VIN",
+                        "price": "Цена_продажи", "cost": "Закупочная_стоимость",
+                        "expenses": "Расходы", "header": "Прибыль", "comment": "Комментарий"
                     })
-                    df_car_deals.to_excel(
-                        writer,
-                        sheet_name="Авто-сделки",
-                        index=False,
-                        columns=["Марка", "Год", "VIN", "Цена_продажи", "Закупочная_стоимость", "Расходы", "Прибыль",
-                                 "Комментарий"]
-                    )
+                    df_car_deals.to_excel(writer, sheet_name="Авто-сделки", index=False)
 
                 # Экспорт настроек
-                settings_data = {
-                    "Стартовый_капитал": [self.get_initial_capital()]
-                }
-                pd.DataFrame(settings_data).to_excel(
-                    writer, sheet_name="Настройки", index=False
-                )
+                settings_data = {"Стартовый_капитал": [self.get_initial_capital()]}
+                pd.DataFrame(settings_data).to_excel(writer, sheet_name="Настройки", index=False)
 
-                # Экспорт месячного отчета (если предоставлены данные)
+                # Экспорт месячного отчета
                 if monthly_data:
-                    # Ежедневная сводка
                     if 'daily_summary' in monthly_data and monthly_data['daily_summary']:
-                        daily_df = pd.DataFrame(monthly_data['daily_summary'])
-                        daily_df.to_excel(
-                            writer,
-                            sheet_name="Месяц_Ежедневно",
-                            index=False
-                        )
-
-                    # Детализация операций
+                        pd.DataFrame(monthly_data['daily_summary']).to_excel(
+                            writer, sheet_name="Месяц_Ежедневно", index=False)
                     if 'daily_details' in monthly_data and monthly_data['daily_details']:
-                        details_df = pd.DataFrame(monthly_data['daily_details'])
-                        details_df.to_excel(
-                            writer,
-                            sheet_name="Месяц_Операции",
-                            index=False
-                        )
-
-                    # Статистика по категориям
+                        pd.DataFrame(monthly_data['daily_details']).to_excel(
+                            writer, sheet_name="Месяц_Операции", index=False)
                     if 'category_stats' in monthly_data and monthly_data['category_stats']:
                         stats_df = pd.DataFrame(list(monthly_data['category_stats'].items()),
                                                 columns=['Категория', 'Сумма'])
-                        stats_df.to_excel(
-                            writer,
-                            sheet_name="Месяц_Категории",
-                            index=False
-                        )
-
-                    # Общая информация о месяце
+                        stats_df.to_excel(writer, sheet_name="Месяц_Категории", index=False)
                     if 'month_info' in monthly_data:
-                        month_info_df = pd.DataFrame([monthly_data['month_info']])
-                        month_info_df.to_excel(
-                            writer,
-                            sheet_name="Месяц_Инфо",
-                            index=False
-                        )
+                        pd.DataFrame([monthly_data['month_info']]).to_excel(
+                            writer, sheet_name="Месяц_Инфо", index=False)
 
             return True
         except Exception as e:
             print(f"Ошибка при экспорте: {e}")
             return False
 
-    def import_from_excel(self):
-        path = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx *.xls")])
-        if not path:
-            return
-
-        try:
-            imported_count = {
-                'transactions': 0,
-                'car_deals': 0
-            }
-
-            with pd.ExcelFile(path) as xls:
-                sheet_names = xls.sheet_names
-
-                # Импорт транзакций (обрабатываем разные варианты названий листов)
-                transaction_sheets = ['Транзакции', 'Transactions', 'Месяц_Операции']
-                for sheet_name in transaction_sheets:
-                    if sheet_name in sheet_names:
-                        df = pd.read_excel(xls, sheet_name=sheet_name)
-                        for _, row in df.iterrows():
-                            try:
-                                # Обрабатываем разные форматы названий колонок
-                                date = row.get("date", row.get("Дата", datetime.now().strftime("%d.%m.%Y %H:%M")))
-                                trans_type = row.get("type", row.get("Тип", "Приход"))
-                                amount = float(row.get("amount", row.get("Сумма", 0)))
-                                description = str(row.get("description", row.get("Описание", "")))
-                                category = row.get("category", row.get("Категория", "Другое"))
-                                payment_type = row.get("payment_type", row.get("Тип_оплаты", "Наличные"))
-
-                                transaction = {
-                                    "date": date,
-                                    "type": trans_type,
-                                    "amount": amount if trans_type == "Приход" else -amount,
-                                    "description": description,
-                                    "category": category,
-                                    "payment_type": payment_type
-                                }
-
-                                if not self.db.exists_transaction(transaction):
-                                    self.db.add_transaction(transaction)
-                                    imported_count['transactions'] += 1
-
-                            except Exception as e:
-                                print(f"Ошибка при импорте транзакции: {e}")
-
-                # Импорт авто-сделок
-                car_sheets = ['Авто-сделки', 'CarDeals', 'Площадка']
-                for sheet_name in car_sheets:
-                    if sheet_name in sheet_names:
-                        df = pd.read_excel(xls, sheet_name=sheet_name)
-                        for _, row in df.iterrows():
-                            try:
-                                brand = str(row.get("brand", row.get("Марка", row.get("Модель", ""))).strip())
-                                if not brand:
-                                    continue
-
-                                year = str(row.get("year", row.get("Год", ""))).strip()
-                                vin = str(row.get("vin", row.get("VIN", ""))).strip()
-                                price = float(row.get("price", row.get("Цена_продажи", row.get("Цена", 0))))
-                                cost = float(row.get("cost", row.get("Закупочная_стоимость", row.get("Стоимость", 0))))
-                                expenses = float(row.get("expenses", row.get("Расходы", 0)))
-                                profit = float(
-                                    row.get("profit", row.get("Прибыль", row.get("header", price - cost - expenses))))
-                                comment = str(row.get("comment", row.get("Комментарий", "")))
-
-                                car_deal = {
-                                    "brand": brand,
-                                    "year": year,
-                                    "vin": vin,
-                                    "price": price,
-                                    "cost": cost,
-                                    "expenses": expenses,
-                                    "header": profit,
-                                    "comment": comment
-                                }
-                                if not self.db.exists_car_deal(car_deal):
-                                    self.db.add_car_deal(car_deal)
-                                    imported_count['car_deals'] += 1
-
-                            except Exception as e:
-                                print(f"Ошибка при импорте авто-сделки: {e}")
-
-                # Импорт настроек
-                settings_sheets = ['Настройки', 'Settings', 'Config']
-                for sheet_name in settings_sheets:
-                    if sheet_name in sheet_names:
-                        df = pd.read_excel(xls, sheet_name=sheet_name)
-                        capital_columns = ['initial_capital', 'Стартовый_капитал']
-                        for col in capital_columns:
-                            if col in df.columns:
-                                try:
-                                    capital = float(df.iloc[0][col])
-                                    self.db.update_initial_capital(capital)
-                                    self.initial_capital = capital
-                                    break
-                                except:
-                                    pass
-
-            # Обновляем данные из базы
-            self.transactions = self.db.get_all_transactions()
-            self.car_deals = self.db.get_all_car_deals()
-            self.initial_capital = self.db.get_initial_capital()
-
-            # Обновление поля капитала
-            self.capital_entry.delete(0, tk.END)
-            self.capital_entry.insert(0, str(self.initial_capital))
-
-            # Полностью обновляем отчёты
-            self.update_report()
-            self.update_monthly_report()
-
-            messagebox.showinfo(
-                "Успех",
-                f"Данные успешно импортированы из Excel!\n\n"
-                f"Добавлено:\n"
-                f"• Транзакций: {imported_count['transactions']}\n"
-                f"• Авто-сделок: {imported_count['car_deals']}\n"
-                f"• Стартовый капитал: {self.initial_capital:,.2f} ₽"
-            )
-
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка при импорте: {str(e)}")
-
-    # ---------------- Закрытие соединения ----------------
     def close(self):
         if self.conn:
             self.conn.close()
             self.conn = None
+
 
 class MoneyTrackerApp:
     def __init__(self, root):
@@ -636,7 +471,7 @@ class MoneyTrackerApp:
             ("Тип операции:", "combobox", ["Приход", "Расход"], "Приход"),
             ("Сумма:", "entry", None, "0.00"),
             ("Описание:", "entry", None, ""),
-            ("Тип оплаты:", "combobox", ["Наличные", "Безнал","Другое"], "Наличные"),
+            ("Тип оплаты:", "combobox", ["Наличные", "Безнал", "Другое"], "Наличные"),
             ("Категория:", "combobox", [
                 "КЦ",
                 "Реклама",
@@ -665,14 +500,27 @@ class MoneyTrackerApp:
             entry.grid(row=row, column=1, sticky="ew", pady=5, padx=10)
             self.entries[label] = entry
 
+        # Переменная для хранения состояния "исключить из расхода"
+        self.exclude_from_total = tk.BooleanVar(value=False)
+
+        # Чекбокс для исключения из общего расхода
+        exclude_checkbox = ctk.CTkCheckBox(
+            self.add_frame,
+            text="Исключить из общего расхода",
+            variable=self.exclude_from_total,
+            font=self.large_font
+        )
+        exclude_checkbox.grid(row=len(fields) + 1, column=0, columnspan=2, pady=10, padx=10, sticky="w")
+
+        # ОДНА кнопка добавления операции
         ctk.CTkButton(
             self.add_frame,
             text="Добавить операцию",
-            command=self.add_transaction,
+            command=self.add_transaction,  # Без параметра - используем значение чекбокса
             fg_color="#4CAF50",
             hover_color="#45a049",
             height=40
-        ).grid(row=len(fields) + 1, column=0, columnspan=2, pady=20, sticky="we")
+        ).grid(row=len(fields) + 2, column=0, columnspan=2, pady=20, sticky="we")
 
     def setup_car_frame(self):
         self.car_frame.grid_columnconfigure(1, weight=1)
@@ -784,7 +632,7 @@ class MoneyTrackerApp:
             "#2": {"name": "type", "text": "Тип", "width": 80, "anchor": "center"},
             "#3": {"name": "description", "text": "Описание", "width": 250, "anchor": "center"},
             "#4": {"name": "category", "text": "Категория", "width": 120, "anchor": "center"},
-            "#5": {"name": "amount", "text": "Сумma", "width": 120, "anchor": "e"}
+            "#5": {"name": "amount", "text": "Суммa", "width": 120, "anchor": "e"}
         }
 
         self.detail_tree = ttk.Treeview(self.monthly_frame, columns=list(detail_columns.keys()), show="headings",
@@ -1445,6 +1293,9 @@ class MoneyTrackerApp:
             payment_type = self.entries["Тип оплаты:"].get()
             category = self.entries["Категория:"].get()
 
+            # Используем значение чекбокса
+            exclude_from_total = self.exclude_from_total.get()
+
             if not description:
                 messagebox.showerror("Ошибка", "Введите описание операции!")
                 return
@@ -1458,7 +1309,8 @@ class MoneyTrackerApp:
                 "amount": amount if operation == "Приход" else -amount,
                 "description": description,
                 "category": category,
-                "payment_type": payment_type
+                "payment_type": payment_type,
+                "exclude_from_total": exclude_from_total
             }
 
             self.db.add_transaction(transaction)
@@ -1466,11 +1318,16 @@ class MoneyTrackerApp:
             # Обновляем данные и все отчеты
             self.refresh_data()
 
+            # Сбрасываем форму
             self.entries["Сумма:"].delete(0, tk.END)
             self.entries["Сумма:"].insert(0, "0.00")
             self.entries["Описание:"].delete(0, tk.END)
+            self.exclude_from_total.set(False)  # Сбрасываем чекбокс
 
-            self.show_toast("✅ Операция добавлена")
+            if exclude_from_total:
+                self.show_toast("✅ Операция добавлена (исключена из расхода)")
+            else:
+                self.show_toast("✅ Операция добавлена")
 
         except ValueError:
             messagebox.showerror("Ошибка", "Введите корректную сумму!")
@@ -1562,10 +1419,10 @@ class MoneyTrackerApp:
         # Исключаемые категории (не учитываются в общем приходе/расходе)
         excluded_categories = ["ЗП окладники", "ЗП проценты", "Комиссия брок"]
 
-        # Фильтруем транзакции, исключая указанные категории
+        # Фильтруем транзакции, исключая указанные категории И операции с флагом exclude_from_total
         filtered_transactions = [
             t for t in self.transactions
-            if t["category"] not in excluded_categories
+            if t["category"] not in excluded_categories and not t.get("exclude_from_total", False)
         ]
 
         # ВАЖНО: используем abs() для суммы, но сохраняем знак для расчета
