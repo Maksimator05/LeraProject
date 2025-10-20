@@ -9,130 +9,314 @@ class FinancialReportPage(ft.Column):
         # Функция для создания стиля заголовка
         def create_header(text, width=120):
             return ft.Container(
-                content=ft.Text(text, size=12, weight=ft.FontWeight.BOLD),
+                content=ft.Text(
+                    text,
+                    size=12,
+                    weight=ft.FontWeight.BOLD,
+                    color="white",
+                    text_align=ft.TextAlign.CENTER
+                ),
                 padding=10,
-                border=ft.border.all(1, "#BDBDBD"),
-                bgcolor="#E3F2FD",
+                border=ft.border.all(1, "#835DA3"),
+                bgcolor="#835DA3",
                 height=40,
                 width=width,
+                border_radius=25,
                 alignment=ft.alignment.center
             )
 
-        # Функция для создания стиля обычной ячейки
-        def create_cell(text, width=120):
+        # Функция для создания строки данных
+        def create_data_row(*texts, widths, bg_color="#FFFFFF"):
             return ft.Container(
-                content=ft.Text(text, size=12),
-                padding=10,
-                border=ft.border.all(1, "#BDBDBD"),
-                bgcolor="#FFFFFF",
-                height=40,
-                width=width,
-                alignment=ft.alignment.center
+                content=ft.Row([
+                    ft.Container(
+                        content=ft.Text(
+                            text,
+                            size=14,
+                            color="#FFFFFF",
+                            text_align=ft.TextAlign.CENTER
+                        ),
+                        width=width,
+                        padding=10,
+                        alignment=ft.alignment.center,
+                        border=ft.border.all(0.5, "#424242"),
+                    ) for text, width in zip(texts, widths)
+                ], spacing=50, alignment=ft.MainAxisAlignment.CENTER),
+                bgcolor=bg_color,
             )
+
+        operation_widths = [100, 120, 100, 150, 120, 120]
+        auto_widths = [100, 80, 150, 120, 120, 100, 100, 150]
 
         self.controls = [
             ft.Container(
                 content=ft.Column([
-                    # Заголовок страницы
-                    ft.Container(
-                        content=ft.Text("ФИНАНСОВЫЙ ОТЧЕТ", size=18, weight=ft.FontWeight.BOLD),
-                        padding=ft.padding.only(bottom=20)
-                    ),
-
                     # Первая таблица - операции
                     ft.Container(
                         content=ft.Column([
-                            ft.Text("ОПЕРАЦИИ", size=14, weight=ft.FontWeight.BOLD),
-                            ft.Container(height=10),
+                            # Заголовки
                             ft.Row([
-                                create_header("ДЕЛО", 80),
-                                create_header("ТИП СПЕРВЫЙ", 100),
-                                create_header("СЬЯМЯ", 80),
-                                create_header("ОПИСАНИЕ", 120),
-                                create_header("КОТОРЫЙ", 80),
-                                create_header("ТИП ОПИСЫ", 100),
-                            ]),
-                        ]),
-                        padding=10
+                                create_header("ДАТА", 100),
+                                create_header("ТИП ОПЕРАЦИИ", 160),
+                                create_header("СУММА", 100),
+                                create_header("ОПИСАНИЕ", 150),
+                                create_header("КАТЕГОРИЯ", 120),
+                                create_header("ТИП ОПЛАТЫ", 120),
+                            ], spacing=50, alignment=ft.MainAxisAlignment.CENTER),
+
+                            # Пустые данные для операций
+                            ft.Container(
+                                content=ft.ListView(
+                                    controls=[],
+                                    height=200,
+                                    spacing=0,
+                                ),
+                                border=ft.border.all(1, "#FFFFFF"),
+                                border_radius=25,
+                            )
+                        ], spacing=0),
+                        padding=0,
+                        border_radius=25,
+                        bgcolor="#BFBDBD",
+                        border=ft.border.all(1, "#BDBDBD"),
                     ),
 
-                    ft.Container(height=20),
+                    ft.Container(height=5),
 
                     # Вторая таблица - авто-сделки
                     ft.Container(
                         content=ft.Column([
-                            ft.Text("АВТО-СДЕЛКИ", size=14, weight=ft.FontWeight.BOLD),
-                            ft.Container(height=10),
+                            # Заголовки
                             ft.Row([
-                                create_header("МАРКА", 80),
-                                create_header("ГОД", 60),
-                                create_header("VIN", 100),
-                                create_header("ЦЕНА ПРОДАЖИ", 100),
+                                create_header("МАРКА", 100),
+                                create_header("ГОД", 80),
+                                create_header("VIN", 150),
+                                create_header("ЦЕНА ПРОДАЖИ", 120),
                                 create_header("ЗАКУП. СТОИМОСТЬ", 120),
-                                create_header("РАСХОДЫ", 80),
-                                create_header("ПРИБЫЛЬ", 80),
-                                create_header("КОММЕНТАРИЙ", 120),
-                            ]),
-                        ]),
-                        padding=10
+                                create_header("РАСХОДЫ", 100),
+                                create_header("ПРИБЫЛЬ", 100),
+                                create_header("КОММЕНТАРИЙ", 150),
+                            ], spacing=50, alignment=ft.MainAxisAlignment.CENTER),
+
+                            # Пустые данные для авто-сделок
+                            ft.Container(
+                                content=ft.ListView(
+                                    controls=[],
+                                    height=200,
+                                    spacing=0,
+                                ),
+                                border=ft.border.all(1, "#FFFFFF"),
+                                border_radius=25,
+                            )
+                        ], spacing=0),
+                        padding=0,
+                        border_radius=25,
+                        bgcolor="#BFBDBD",
+                        border=ft.border.all(1, "#BDBDBD"),
                     ),
 
-                    ft.Container(height=20),
+                    ft.Container(height=5),
 
-                    # Третья таблица - итоги
+                    # Третья таблица - итоги в виде карточек
                     ft.Container(
                         content=ft.Column([
-                            ft.Text("ИТОГИ", size=14, weight=ft.FontWeight.BOLD),
-                            ft.Container(height=10),
-                            ft.Row([
-                                create_header("КАПИТАЛ", 100),
-                                create_header("ОБЩИЙ ПРИХОД", 120),
-                                create_header("ОБЩИЙ РАСХОД", 120),
-                                create_header("ДОП.ВЛОЖЕНИЯ", 120),
-                                create_header("ПРИБЫЛЬ С АВТО", 120),
-                                create_header("ОБЩАЯ ПРИБЫЛЬ", 120),
-                            ]),
-                        ]),
-                        padding=10
-                    ),
+                            ft.Container(height=5),
 
-                    # Кнопки управления
-                    ft.Container(
-                        content=ft.Row([
-                            ft.ElevatedButton(
-                                "СФОРМИРОВАТЬ ОТЧЕТ",
-                                style=ft.ButtonStyle(
-                                    color="white",
-                                    bgcolor="#2196F3",
-                                    padding=15
-                                )
-                            ),
-                            ft.ElevatedButton(
-                                "ЭКСПОРТ В EXCEL",
-                                style=ft.ButtonStyle(
-                                    color="white",
-                                    bgcolor="#4CAF50",
-                                    padding=15
-                                )
-                            ),
-                            ft.ElevatedButton(
-                                "ОЧИСТИТЬ",
-                                style=ft.ButtonStyle(
-                                    color="white",
-                                    bgcolor="#F44336",
-                                    padding=15
-                                )
-                            ),
-                        ], spacing=20),
-                        padding=ft.padding.only(top=30)
-                    )
+                            ft.Row([
+                                # Карточка КАПИТАЛ
+                                ft.Container(
+                                    content=ft.Column([
+                                        ft.Text(
+                                            "КАПИТАЛ",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="white",
+                                            text_align=ft.TextAlign.CENTER
+                                        ),
+                                        ft.Container(height=8),
+                                        ft.Text(
+                                            "0 ₽",
+                                            size=14,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="#FFFFFF",
+                                            text_align=ft.TextAlign.CENTER
+                                        ),
+                                    ],
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                    spacing=0
+                                    ),
+                                    width=150,
+                                    height=80,
+                                    padding=15,
+                                    bgcolor="#835DA3",
+                                    border_radius=45,
+                                    alignment=ft.alignment.center,
+                                ),
+
+                                # Карточка ОБЩИЙ ПРИХОД
+                                ft.Container(
+                                    content=ft.Column([
+                                        ft.Text(
+                                            "ОБЩИЙ ПРИХОД",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="white",
+                                            text_align=ft.TextAlign.CENTER
+                                        ),
+                                        ft.Container(height=8),
+                                        ft.Text(
+                                            "0 ₽",
+                                            size=14,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="#FFFFFF",
+                                            text_align=ft.TextAlign.CENTER
+                                        ),
+                                    ],
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                    spacing=0
+                                    ),
+                                    width=150,
+                                    height=80,
+                                    padding=15,
+                                    bgcolor="#835DA3",
+                                    border_radius=45,
+                                    alignment=ft.alignment.center,
+                                ),
+
+                                # Карточка ОБЩИЙ РАСХОД
+                                ft.Container(
+                                    content=ft.Column([
+                                        ft.Text(
+                                            "ОБЩИЙ РАСХОД",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="white",
+                                            text_align=ft.TextAlign.CENTER
+                                        ),
+                                        ft.Container(height=8),
+                                        ft.Text(
+                                            "0 ₽",
+                                            size=14,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="#FFFFFF",
+                                            text_align=ft.TextAlign.CENTER
+                                        ),
+                                    ],
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                    spacing=0
+                                    ),
+                                    width=150,
+                                    height=80,
+                                    padding=15,
+                                    bgcolor="#835DA3",
+                                    border_radius=45,
+                                    alignment=ft.alignment.center,
+                                ),
+
+                                # Карточка ДОП.ВЛОЖЕНИЯ
+                                ft.Container(
+                                    content=ft.Column([
+                                        ft.Text(
+                                            "ДОП.ВЛОЖЕНИЯ",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="white",
+                                            text_align=ft.TextAlign.CENTER
+                                        ),
+                                        ft.Container(height=8),
+                                        ft.Text(
+                                            "0 ₽",
+                                            size=14,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="#FFFFFF",
+                                            text_align=ft.TextAlign.CENTER
+                                        ),
+                                    ],
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                    spacing=0
+                                    ),
+                                    width=150,
+                                    height=80,
+                                    padding=15,
+                                    bgcolor="#835DA3",
+                                    border_radius=45,
+                                    alignment=ft.alignment.center,
+                                ),
+
+                                # Карточка ПРИБЫЛЬ С АВТО
+                                ft.Container(
+                                    content=ft.Column([
+                                        ft.Text(
+                                            "ПРИБЫЛЬ С АВТО",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="white",
+                                            text_align=ft.TextAlign.CENTER
+                                        ),
+                                        ft.Container(height=8),
+                                        ft.Text(
+                                            "0 ₽",
+                                            size=14,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="#FFFFFF",
+                                            text_align=ft.TextAlign.CENTER
+                                        ),
+                                    ],
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                    spacing=0
+                                    ),
+                                    width=150,
+                                    height=80,
+                                    padding=15,
+                                    bgcolor="#835DA3",
+                                    border_radius=45,
+                                    alignment=ft.alignment.center,
+                                ),
+
+                                # Карточка ОБЩАЯ ПРИБЫЛЬ
+                                ft.Container(
+                                    content=ft.Column([
+                                        ft.Text(
+                                            "ОБЩАЯ ПРИБЫЛЬ",
+                                            size=12,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="white",
+                                            text_align=ft.TextAlign.CENTER
+                                        ),
+                                        ft.Container(height=8),
+                                        ft.Text(
+                                            "0 ₽",
+                                            size=14,
+                                            weight=ft.FontWeight.BOLD,
+                                            color="#FFFFFF",
+                                            text_align=ft.TextAlign.CENTER
+                                        ),
+                                    ],
+                                    alignment=ft.MainAxisAlignment.CENTER,
+                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                                    spacing=0
+                                    ),
+                                    width=150,
+                                    height=80,
+                                    padding=15,
+                                    bgcolor="#835DA3",
+                                    border_radius=45,
+                                    alignment=ft.alignment.center,
+                                ),
+                            ], spacing=20, alignment=ft.MainAxisAlignment.CENTER, scroll=ft.ScrollMode.ADAPTIVE),
+                        ], alignment=ft.MainAxisAlignment.CENTER, horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                        padding=5,
+                        bgcolor="#2C2C2C",
+                        border_radius=25,
+                    ),
                 ]),
-                padding=30,
-                border=ft.border.all(1, "#BDBDBD"),
-                border_radius=10,
-                bgcolor="#FAFAFA"
-            )
+            ),
         ]
         self.spacing = 10
         self.alignment = ft.MainAxisAlignment.START
-        self.horizontal_alignment = ft.CrossAxisAlignment.START
+        self.horizontal_alignment = ft.CrossAxisAlignment.CENTER

@@ -21,7 +21,7 @@ class NewOperationPage(ft.Column):
             "border_radius": 25,
             "bgcolor": "#424242",
             "border_width": 1,
-            "text_size": 12,
+            "text_size": 16,
             "color": "white",  # Цвет текста в закрытом состоянии
             "width": 300,
             "focused_border_color": "#835DA3",
@@ -57,7 +57,6 @@ class NewOperationPage(ft.Column):
         self.controls = [
             ft.Container(
                 content=ft.Column([
-                    # Операция и Введите сумму на одном уровне
                     ft.Row([
                         ft.Container(
                             content=ft.Column([

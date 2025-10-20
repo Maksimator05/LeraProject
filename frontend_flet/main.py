@@ -37,7 +37,7 @@ def main(page: ft.Page):
     inactive_button_style = ft.ButtonStyle(
         color="white",
         bgcolor="#835DA3",
-        padding=ft.padding.symmetric(horizontal=20, vertical=12),
+        padding=ft.padding.symmetric(horizontal=30, vertical=20),
         shape=ft.RoundedRectangleBorder(radius=25)
     )
 
