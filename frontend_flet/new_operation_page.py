@@ -67,11 +67,12 @@ class NewOperationPage(ft.Column):
                             size=16,
                         ),
                         padding=15,
+                        width=270,
                         bgcolor="#424242",
                         border_radius=10,
                         on_click=lambda e, opt=option: self.select_option(dropdown_id, opt),
                     ) for option in options
-                ], spacing=2),
+                ], spacing=2, scroll=ft.ScrollMode.ADAPTIVE),  # ← ДОБАВЛЕН СКРОЛЛ
                 bgcolor="#2C2C2C",
                 padding=5,
                 border_radius=15,
@@ -79,8 +80,9 @@ class NewOperationPage(ft.Column):
                 visible=False,
                 animate_opacity=200,
                 # Позиционируем поверх других элементов
-                top=65,  # Фиксированная позиция под основным полем (60 + 5)
+                top=85,  # Фиксированная позиция под основным полем (80 + 5)
                 left=0,
+                height=100,  # ← ФИКСИРОВАННАЯ ВЫСОТА ДЛЯ СКРОЛЛА
             )
 
             # Обертка с Stack для позиционирования поверх других элементов
@@ -92,7 +94,7 @@ class NewOperationPage(ft.Column):
                     ], spacing=5),
                     options_container,
                 ],
-                height=200,  # Зарезервируем место для выпадающего списка
+                height=200,  # ← УВЕЛИЧЕНА ВЫСОТА ДЛЯ ВМЕЩЕНИЯ ВЫПАДАЮЩЕГО СПИСКА
             )
 
             # Сохраняем ссылки на элементы
