@@ -24,53 +24,83 @@ class NewOperationPage(ft.Column):
             overlay_color="#835DA3",
         )
 
-        # Функция для создания кастомного dropdown через PopupMenuButton
-        def create_custom_dropdown(label, options, default_value=None):
-            if default_value is None and options:
-                default_value = options[0]
+        # Словарь для хранения состояний dropdown'ов
+        self.dropdown_states = {}
 
-            selected_value = ft.Text(
-                value=default_value or "",
-                color="white",
-                size=16,
-                expand=True
-            )
+        # Функция для создания кастомного dropdown
+        def create_custom_dropdown(label, options, dropdown_id):
+            if dropdown_id not in self.dropdown_states:
+                self.dropdown_states[dropdown_id] = {
+                    "is_open": False,
+                    "selected": options[0] if options else ""
+                }
+
+            state = self.dropdown_states[dropdown_id]
 
             # Контейнер для отображения выбранного значения
-            display_container = ft.Container(
+            selected_container = ft.Container(
                 content=ft.Row([
-                    selected_value,
+                    ft.Text(
+                        state["selected"],
+                        color="white",
+                        size=16,
+                        expand=True
+                    ),
                     ft.Text("▼", color="white", size=16),
                 ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
-                padding=ft.padding.symmetric(horizontal=20, vertical=15),
+                padding=20,
                 border=ft.border.all(1, "#424242"),
                 border_radius=25,
                 bgcolor="#424242",
                 width=300,
+                height=60,  # ФИКСИРОВАННАЯ ВЫСОТА для расчета позиции
+                on_click=lambda e: self.toggle_dropdown(dropdown_id),
             )
 
-            def on_item_selected(e):
-                selected_value.value = e.control.text
-                display_container.bgcolor = "#835DA3"
-                display_container.border = ft.border.all(1, "#835DA3")
-                display_container.update()
-                selected_value.update()
-
-            # Создаем PopupMenuButton - МИНИМАЛЬНАЯ ВЕРСИЯ
-            popup_menu = ft.PopupMenuButton(
-                content=display_container,
-                items=[
-                    ft.PopupMenuItem(
-                        text=option,
-                        on_click=on_item_selected,
+            # Контейнер с опциями - СДЕЛАЕМ ЕГО ПОВЕРХ ДРУГИХ ЭЛЕМЕНТОВ
+            options_container = ft.Container(
+                content=ft.Column([
+                    ft.Container(
+                        content=ft.Text(
+                            option,
+                            color="white",
+                            size=16,
+                        ),
+                        padding=15,
+                        bgcolor="#424242",
+                        border_radius=10,
+                        on_click=lambda e, opt=option: self.select_option(dropdown_id, opt),
                     ) for option in options
-                ]
+                ], spacing=2),
+                bgcolor="#2C2C2C",
+                padding=5,
+                border_radius=15,
+                width=300,  # ТА ЖЕ ШИРИНА КАК У ОСНОВНОГО ПОЛЯ
+                visible=False,
+                animate_opacity=200,
+                # Позиционируем поверх других элементов
+                top=65,  # Фиксированная позиция под основным полем (60 + 5)
+                left=0,
             )
 
-            return ft.Column([
-                ft.Text(label, size=12, color="white", weight=ft.FontWeight.BOLD),
-                popup_menu,
-            ], spacing=5)
+            # Обертка с Stack для позиционирования поверх других элементов
+            dropdown_stack = ft.Stack(
+                [
+                    ft.Column([
+                        ft.Text(label, size=12, color="white", weight=ft.FontWeight.BOLD),
+                        selected_container,
+                    ], spacing=5),
+                    options_container,
+                ],
+                height=200,  # Зарезервируем место для выпадающего списка
+            )
+
+            # Сохраняем ссылки на элементы
+            state["selected_container"] = selected_container
+            state["options_container"] = options_container
+            state["dropdown_stack"] = dropdown_stack
+
+            return dropdown_stack
 
         self.controls = [
             ft.Container(
@@ -80,7 +110,8 @@ class NewOperationPage(ft.Column):
                             content=ft.Column([
                                 create_custom_dropdown(
                                     "ОПЕРАЦИЯ",
-                                    ["ПРИХОД", "РАСХОД"]
+                                    ["ПРИХОД", "РАСХОД"],
+                                    "operation"
                                 ),
                             ]),
                             expand=1,
@@ -119,7 +150,8 @@ class NewOperationPage(ft.Column):
                                     ft.Container(
                                         content=create_custom_dropdown(
                                             "ТИП ОПЛАТЫ",
-                                            ["Наличные", "Безнал", "Другое"]
+                                            ["Наличные", "Безнал", "Другое"],
+                                            "payment"
                                         ),
                                         expand=1,
                                         padding=5
@@ -128,7 +160,8 @@ class NewOperationPage(ft.Column):
                                         content=create_custom_dropdown(
                                             "КАТЕГОРИЯ",
                                             ["КЦ", "АРЕНДА", "РЕКЛАМА", "ЗП ОКЛАДНИКИ", "ЗП ПРОЦЕНТ",
-                                             "КОМИССИЯ", "ДИЛЕРСТВО", "ДРУГОЕ"]
+                                             "КОМИССИЯ", "ДИЛЕРСТВО", "ДРУГОЕ"],
+                                            "category"
                                         ),
                                         expand=1,
                                         padding=5
@@ -171,3 +204,30 @@ class NewOperationPage(ft.Column):
         self.alignment = ft.MainAxisAlignment.CENTER
         self.horizontal_alignment = ft.CrossAxisAlignment.CENTER
         self.expand = True
+
+    def toggle_dropdown(self, dropdown_id):
+        state = self.dropdown_states[dropdown_id]
+        state["is_open"] = not state["is_open"]
+        state["options_container"].visible = state["is_open"]
+
+        # Закрываем другие открытые dropdown'ы
+        for other_id, other_state in self.dropdown_states.items():
+            if other_id != dropdown_id and other_state["is_open"]:
+                other_state["is_open"] = False
+                other_state["options_container"].visible = False
+                other_state["options_container"].update()
+
+        state["options_container"].update()
+
+    def select_option(self, dropdown_id, option):
+        state = self.dropdown_states[dropdown_id]
+        state["selected"] = option
+        # Обновляем текст в контейнере
+        state["selected_container"].content.controls[0].value = option
+        state["selected_container"].bgcolor = "#835DA3"
+        state["selected_container"].border = ft.border.all(1, "#835DA3")
+        state["is_open"] = False
+        state["options_container"].visible = False
+
+        state["selected_container"].update()
+        state["options_container"].update()
