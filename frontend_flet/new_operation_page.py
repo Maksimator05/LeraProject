@@ -15,19 +15,6 @@ class NewOperationPage(ft.Column):
             "text_size": 12
         }
 
-        # Стиль для выпадающих списков
-        dropdown_style = {
-            "border_color": "#424242",
-            "border_radius": 25,
-            "bgcolor": "#424242",
-            "border_width": 1,
-            "text_size": 16,
-            "color": "white",  # Цвет текста в закрытом состоянии
-            "width": 300,
-            "focused_border_color": "#835DA3",
-            "focused_bgcolor": "#835DA3",
-        }
-
         # Стиль для кнопок
         button_style = ft.ButtonStyle(
             color="white",
@@ -37,22 +24,53 @@ class NewOperationPage(ft.Column):
             overlay_color="#835DA3",
         )
 
-        # Функция для создания dropdown с цветным текстом выбранной опции
-        def create_dropdown(label, options):
-            dropdown = ft.Dropdown(
-                label=label,
-                **dropdown_style,
-                options=[ft.dropdown.Option(option) for option in options],
+        # Функция для создания кастомного dropdown через PopupMenuButton
+        def create_custom_dropdown(label, options, default_value=None):
+            if default_value is None and options:
+                default_value = options[0]
+
+            selected_value = ft.Text(
+                value=default_value or "",
+                color="white",
+                size=16,
+                expand=True
             )
 
-            # Обработчик изменения выбора
-            def on_change(e):
-                # При изменении выбора устанавливаем белый цвет текста
-                dropdown.color = "white"
-                dropdown.update()
+            # Контейнер для отображения выбранного значения
+            display_container = ft.Container(
+                content=ft.Row([
+                    selected_value,
+                    ft.Text("▼", color="white", size=16),
+                ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                padding=ft.padding.symmetric(horizontal=20, vertical=15),
+                border=ft.border.all(1, "#424242"),
+                border_radius=25,
+                bgcolor="#424242",
+                width=300,
+            )
 
-            dropdown.on_change = on_change
-            return dropdown
+            def on_item_selected(e):
+                selected_value.value = e.control.text
+                display_container.bgcolor = "#835DA3"
+                display_container.border = ft.border.all(1, "#835DA3")
+                display_container.update()
+                selected_value.update()
+
+            # Создаем PopupMenuButton - МИНИМАЛЬНАЯ ВЕРСИЯ
+            popup_menu = ft.PopupMenuButton(
+                content=display_container,
+                items=[
+                    ft.PopupMenuItem(
+                        text=option,
+                        on_click=on_item_selected,
+                    ) for option in options
+                ]
+            )
+
+            return ft.Column([
+                ft.Text(label, size=12, color="white", weight=ft.FontWeight.BOLD),
+                popup_menu,
+            ], spacing=5)
 
         self.controls = [
             ft.Container(
@@ -60,7 +78,7 @@ class NewOperationPage(ft.Column):
                     ft.Row([
                         ft.Container(
                             content=ft.Column([
-                                create_dropdown(
+                                create_custom_dropdown(
                                     "ОПЕРАЦИЯ",
                                     ["ПРИХОД", "РАСХОД"]
                                 ),
@@ -99,7 +117,7 @@ class NewOperationPage(ft.Column):
                             content=ft.Column([
                                 ft.Row([
                                     ft.Container(
-                                        content=create_dropdown(
+                                        content=create_custom_dropdown(
                                             "ТИП ОПЛАТЫ",
                                             ["Наличные", "Безнал", "Другое"]
                                         ),
@@ -107,7 +125,7 @@ class NewOperationPage(ft.Column):
                                         padding=5
                                     ),
                                     ft.Container(
-                                        content=create_dropdown(
+                                        content=create_custom_dropdown(
                                             "КАТЕГОРИЯ",
                                             ["КЦ", "АРЕНДА", "РЕКЛАМА", "ЗП ОКЛАДНИКИ", "ЗП ПРОЦЕНТ",
                                              "КОМИССИЯ", "ДИЛЕРСТВО", "ДРУГОЕ"]

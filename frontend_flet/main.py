@@ -11,6 +11,7 @@ def main(page: ft.Page):
     page.window.width = 1400
     page.window.height = 800
     page.window.title = "Finance App"
+    page.scroll = ft.ScrollMode.ADAPTIVE  # ← включаем прокрутку для всей страницы
 
     # Устанавливаем темный фон для страницы (будет виден в "скруглениях")
     page.bgcolor = "#2D2D2D"  # темно-серый фон вокруг контента
